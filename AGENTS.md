@@ -108,11 +108,13 @@ rules. Keep changes small.
 
 ## Suspend / resume (implemented in `train.py`)
 
-Pause a multi-day run = checkpoint then exit (never `SIGSTOP`, which holds
-VRAM). Resume = `--resume ckpt.pt`. Checkpoints save model + optimizer (Adam
-m/v), token-budget schedule, GradScaler, sampler and RNG state. Signal
-handlers only set flags; save at a completed update boundary. See the plan
-for atomic writes, compatibility checks and resume verification.
+Pause a multi-day run = checkpoint then exit (decided: **no** `SIGSTOP`, **no**
+resident-in-VRAM pause — a paused run always checkpoints and exits, freeing
+VRAM and terminating the process). Resume = `--resume ckpt.pt`. Checkpoints
+save model + optimizer (Adam m/v), token-budget schedule, GradScaler, sampler
+and RNG state. Signal handlers only set flags; save at a completed update
+boundary. See the plan for atomic writes, compatibility checks and resume
+verification.
 
 ## Handoff procedure
 

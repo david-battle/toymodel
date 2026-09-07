@@ -306,8 +306,10 @@ This is the key operational requirement: pause a multi-day run to free the GPU
 for other work, then resume exactly where it left off.
 
 ### Semantics
-- **Pause = checkpoint then exit.** Do NOT use `SIGSTOP` — that holds VRAM and
-  defeats the purpose of freeing the GPU.
+- **Pause = checkpoint then exit (decided).** Do NOT use `SIGSTOP` and no
+  resident-in-VRAM pause: a paused run always checkpoints and exits, freeing
+  VRAM and terminating the process. Resume = `--resume ckpt/last.pt`. This is
+  the only supported pause mode going forward.
 - **Resume = reload checkpoint and continue.**
 
 ### Checkpoint contents (`torch.save` of a dict)
