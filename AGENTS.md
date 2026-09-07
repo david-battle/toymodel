@@ -32,9 +32,18 @@ rules. Keep changes small.
 - With tied embeddings, use nanoGPT-style init (std 0.02, scaled residual
   projections); PyTorch's default embedding init gives an initial loss of 50+.
 - Model recipe: 8 layers × 512 dim, GPT-2 tokenizer (50,257 vocab), ~51 M
-  params. Corpus shares (50/20/20/10) are data-loader sampling weights, not
-  raw sizes. Textbook supply must be measured; Feynman is optional pending
-  permission review. A 1 B-token budget does not guarantee convergence.
+  params. Corpus shares (60/28/12) are data-loader sampling weights, not
+  raw sizes. A 1 B-token budget does not guarantee convergence.
+- **`train.py` is written and smoke-verified**: document Rajeev-style
+  (nanoGPT-style) fp16 AMP loop, AdamW with weight-decay grouping (exclude
+  dim<2), text-long cosine LR on `tokens_seen`, document-level mixture sampler
+  (60/28/12 with SE split by tokens), local Generator RNG saved in every
+  checkpoint for bit-exact resume, periodic + SIGINT/SIGTERM checkpointing
+  with atomic save/fsync and rotation, held-out per-source eval. Verified:
+  fresh run (loss 10.4 → 9.9 over ~1M tokens), `--resume last.pt`,
+  SIGTERM-pause → clean save → resume, `--no-accumulate`. First-eval `best.pt`
+  save needs `CKPT_DIR` to exist upfront (mkdir at startup). Checkpoint ≈
+  0.61 GB (`last.pt` full state, `best.pt` ~0.2 GB weights-only).
 
 ## Current state
 
@@ -67,9 +76,11 @@ rules. Keep changes small.
     appends incrementally and stops at quota; unauthenticated HF can rate-limit
     (resume-safe — already-kept ids are skipped). Ran a couple of times to
     finish.
-- **Not yet implemented**: `train.py`, `sample.py`. `benchmark.py` exists but
-  the full sustained timed run is still to be done. The corpus is complete
-  (arXiv/SE/Wikipedia, ~285M tokens); next milestone is `train.py`.
+- **Not yet implemented**: `sample.py`. `benchmark.py` exists but the full
+  sustained timed run is still to be done. The corpus is complete
+  (arXiv/SE/Wikipedia, ~285M tokens). `train.py` is written and smoke-verified
+  (see conventions above); next milestone is the sustained pilot run and
+  `sample.py`.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files
@@ -84,15 +95,15 @@ rules. Keep changes small.
   batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
 - `prepare_data.py` — download/extract/clean/tokenize/audit CLI. `se` and
   `arxiv-rank`/`arxiv-fetch` and `wiki-fetch` sources implemented end-to-end.
-
-## Planned files (from plan)
-
 - `train.py` — nanoGPT-style training loop, fp16 AMP, periodic checkpointing,
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).
+
+## Planned files (from plan)
+
 - `sample.py` — text generation from a checkpoint.
 
-## Suspend / resume (planned, not implemented)
+## Suspend / resume (implemented in `train.py`)
 
 Pause a multi-day run = checkpoint then exit (never `SIGSTOP`, which holds
 VRAM). Resume = `--resume ckpt.pt`. Checkpoints save model + optimizer (Adam

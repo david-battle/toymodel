@@ -7,5 +7,6 @@ corpus/
 *.bin
 *.npy
 *.pt
+*.tmp
 logs/
 *.log

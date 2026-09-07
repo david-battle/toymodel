@@ -382,11 +382,15 @@ rotation matters even with 900 GB free.
 
 1. Repo scaffold + docs (this file + AGENTS.md). ✅
 2. Minimal model + CUDA training smoke test ✅ (`gpu_smoke.py`), then
-   `benchmark.py` for sustained tokens/sec.
-3. `prepare_data.py` + corpus downloader/curator and measured supply audit.
-   StackExchange source done (~108M tokens at score>=5); Wikipedia, textbooks
-   (OpenStax/Wikibooks) and arXiv (category-joined) still to build.
-4. `train.py` with checkpointing + suspend/resume.
+   `benchmark.py` for sustained tokens/sec. ✅ (sanity-checked: ~31k tok/s,
+   2.5–4.1 GB, 74–77 W at micro-batch 8/16, accum toward 128k tokens/update)
+3. `prepare_data.py` + corpus downloader/curator and measured supply audit. ✅
+   All sources done end-to-end: StackExchange (~108M tokens, 140k threads),
+   arXiv ranked-direct (~152M tokens, 4,900 papers), Wikipedia STEM-titled
+   (~25M tokens, 19,596 articles). Textbooks dropped; final 60/28/12 mix
+   (see §3). Total ≈ 285M tokens.
+4. `train.py` with checkpointing + suspend/resume. ✅ (smoke-verified: fresh
+   run, resume, SIGTERM-pause → resume, `--no-accumulate`)
 5. `sample.py`.
 6. Overnight validation run on a small slice.
 7. Full 1 B-token run.
