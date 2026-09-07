@@ -84,11 +84,14 @@ rules. Keep changes small.
     appends incrementally and stops at quota; unauthenticated HF can rate-limit
     (resume-safe — already-kept ids are skipped). Ran a couple of times to
     finish.
-- **Not yet implemented**: `sample.py`. `benchmark.py` exists but the full
-  sustained timed run is still to be done. The corpus is complete
-  (arXiv/SE/Wikipedia, ~285M tokens). `train.py` is written and smoke-verified
-  (see conventions above); next milestone is the sustained pilot run and
-  `sample.py`.
+- **Not yet implemented**: none blocking. **50M-token pilot complete**
+  (50.1M tokens, best_val 5.68, loss 10.4→5.5, 0 AMP skips, finished cleanly on
+  `budget-exhausted`). VRAM hit ~7.8 GB at micro-batch 16 (vs 4.1 GB synthetic
+  benchmark) — full-run recipe should re-benchmark or drop to micro-batch 8.
+  `sample.py` rechecked on `best.pt`/`last.pt`: works; greedy degenerates,
+  output is STEM-structured gibberish that reproduces corpus LaTeX/`## Answer`
+  conventions (expected — see plan §5c). Next: decide the full-run recipe
+  (micro-batch, maybe shorter/fixed context is 256).
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files

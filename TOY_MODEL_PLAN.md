@@ -302,6 +302,20 @@ fixed prompt set for qualitative comparisons; consult the test set only at
 the end. Preserve the initial full-run schedule when resuming; extending its
 budget is a new experiment, not an invisible scheduler reset.
 
+### 5c. Pilot-outcome notes (2026-09-07, 50 M tokens, best_val 5.68)
+
+`sample.py` rechecked against the pilot `best.pt` — it loads weights-only
+`best.pt` and full `last.pt` and generates. Observed, all EXPECTED at this
+maturity (not bugs):
+- Greedy (`--temperature 0`) degenerates into repetition loops ("the same...").
+- Sampled output is STEM-structured but semantically incoherent; it reliably
+  emits corpus formatting conventions — LaTeX (`$...$`, `\sum`, `\mathbb`)
+  leaked from arXiv/SE inline math, `## Answer` markers from StackExchange
+  threads. Inline math was kept as plain text by design; the model reproducing
+  LaTeX syntax is consistent with that choice, not a cleanup failure.
+- `<|endoftext|>` was never emitted, so the EOT-stop path is code-review-only;
+  all pilot samples ran to `--max-new-tokens`.
+
 ---
 
 ## 6. Suspend / resume & checkpointing
@@ -397,7 +411,9 @@ rotation matters even with 900 GB free.
    (see §3). Total ≈ 285M tokens.
 4. `train.py` with checkpointing + suspend/resume. ✅ (smoke-verified: fresh
    run, resume, SIGTERM-pause → resume, `--no-accumulate`)
-5. `sample.py`. ✅ (rough-in written, logic sanity-checked on CPU/CUDA without
-   a checkpoint; recheck against a real checkpoint after the pilot)
-6. Overnight validation run on a small slice.
+5. `sample.py`. ✅ (rough-in rechecked against the 50M-token pilot
+   `best.pt`/`last.pt` — see §5c)
+6. Overnight validation run. ✅ (pilot = 50 M-token budget, clean finish,
+   best_val 5.68, sample.py usable). Next: decide the full-run recipe
+   (micro-batch given the ~7.8 GB VRAM finding; context settled at 256).
 7. Full 1 B-token run.
