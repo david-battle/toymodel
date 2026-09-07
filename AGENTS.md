@@ -13,20 +13,19 @@ rules. Keep changes small.
   script that pushes all their repos; don't substitute a plain `git push` when
   the user types a `(cd .. ; push )` line — run the script exactly as given.
 - Python is **3.14.4**; use the project venv at `.venv/` with `torch 2.14.0`
-  (the only torch release supporting 3.14). Never assume a package is present —
-  check before using.
+  as the proposed version, not a verified install. Verify Python/wheel,
+  driver/runtime and sm_75 support with a real CUDA training step first.
 - **Never commit large artifacts**: `.venv/`, downloaded corpora, tokenized
   `.bin`/`.npy` files, checkpoints, logs. Commit code + docs only (see
   `.gitignore`). Corpus/checkpoints are the project's point, so they're
   gitignored rather than excluded.
-- GPU: RTX 2080 Super Max-Q, 8 GB VRAM, CUDA 12.7, reachable from WSL2 via
-  torch CUDA. Power-capped at 80 W — rough estimate ~15–35k tokens/sec at
-  50M params; **unmeasured** until `benchmark.py` exists. Record the real
-  number here once known.
+- GPU: RTX 2080 Super Max-Q, 8 GB VRAM, observed 80 W cap. nvidia-smi
+  reports CUDA 12.7 driver capability; PyTorch GPU execution and throughput
+  remain unverified. Record sustained benchmark results once measured.
 - Model recipe: 8 layers × 512 dim, GPT-2 tokenizer (50,257 vocab), ~51 M
   params. Corpus shares (50/20/20/10) are data-loader sampling weights, not
-  raw sizes — Feynman is only ~2 M tokens and shares the 20 % expository slot
-  with OpenStax/Wikibooks.
+  raw sizes. Textbook supply must be measured; Feynman is optional pending
+  permission review. A 1 B-token budget does not guarantee convergence.
 
 ## Current state
 
@@ -50,21 +49,26 @@ rules. Keep changes small.
   continue).
 - `sample.py` — text generation from a checkpoint.
 
-## Suspend / resume (as implemented in the plan)
+## Suspend / resume (planned, not implemented)
 
 Pause a multi-day run = checkpoint then exit (never `SIGSTOP`, which holds
 VRAM). Resume = `--resume ckpt.pt`. Checkpoints save model + optimizer (Adam
-m/v) + step/epoch/tokens_seen + scheduler + RNG state; written atomically
-(tmp + `os.replace`) with `best.pt` / `last.pt` / step rotation.
+m/v), token-budget schedule, GradScaler, sampler and RNG state. Signal
+handlers only set flags; save at a completed update boundary. See the plan
+for atomic writes, compatibility checks and resume verification.
 
 ## Handoff procedure
 
 End of a session. Triggered by the user saying "handoff". The agent does
 everything here; the user pushes afterward — **never push**.
 
-1. Kill stray training processes if any (check `pgrep` for `train.py`).
+1. Check training processes and identify this project's run. Never blindly
+   kill training. If a run is active, ask whether to leave it running or
+   request graceful checkpoint-and-exit; verify the saved checkpoint before
+   calling it paused.
 2. Triage stray files (`git status`): add real content, gitignore recurring
-   artifacts (corpus, `.bin`, checkpoints), delete junk. Never ask.
+   artifacts (corpus, `.bin`, checkpoints). Preserve unrelated work and
+   checkpoints; do not delete ambiguous files to obtain a clean worktree.
 3. Verify clean source: `git status` / `git diff`.
 4. Commit source only (`git commit`, short imperative message, e.g. "Add
    corpus downloader").
