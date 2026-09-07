@@ -100,7 +100,7 @@ architecture; changing learned positional embeddings is not an exact resume.
 
 ---
 
-## 3. Corpus (the 50/20/20/10 mix)
+## 3. Corpus (the 60/28/12 mix)
 
 Lean heavily English, post-1900, STEM. Shares are **sampling weights** for the
 data loader (fraction of training tokens drawn from each source), not raw
@@ -109,15 +109,25 @@ physically duplicating it.
 
 | Share | Source | Role | Raw supply |
 |---|---|---|---|
-| **50%** | **arXiv papers** (physics, math, CS) | STEM backbone | billions of tokens — ample |
-| **20%** | **Expository textbooks**: Feynman Lectures + OpenStax STEM texts (CC-BY) + Wikibooks STEM | clean explanatory prose | Feynman ≈ 2 M tokens; OpenStax ≈ 10–20 M; Wikibooks ≈ 10 M+ |
-| **20%** | **English Wikipedia STEM articles** (physics/math/CS/chem/bio categories) | broad modern vocabulary | hundreds of millions — ample |
-| **10%** | **StackExchange STEM Q&A** (physics, math, cs, stats, chemistry, StackOverflow) | conversational Q&A style | hundreds of millions — ample |
+| **60%** | **arXiv papers** (physics, math, CS) | STEM backbone | 152 M tokens (5,015 papers) |
+| **28%** | **StackExchange STEM Q&A** (physics, math, stats, chemistry, cstheory) | conversational Q&A style | 108 M tokens (140k threads) |
+| **12%** | **English Wikipedia STEM-titled articles** (via hf streaming, title-filtered) | broad modern vocabulary | 25 M tokens (19,596 articles) |
 
-**Supply vs. demand.** All supply figures above are rough, unverified estimates
-before license filtering, cleaning and deduplication, not acquisition promises.
-For a 1 B-token training budget the source allocations are 500/200/200/100 M
-token presentations, not necessarily distinct tokens. Measure unique eligible
+The textbook slot (Feynman/OpenStax/Wikibooks) was dropped: it added the most
+engineering for a marginal token contribution, and the remaining three sources
+already exceed the 5-pass exposure cap for a 1 B-token budget. Final mix chosen
+2026-09-07 so every source stays within its 5-pass cap (see below).
+
+**Supply vs. demand.** For a 1 B-token training budget the source allocations
+are 600/280/120 M token presentations, not necessarily distinct tokens.
+Measure unique eligible tokens U per source and report expected exposure as
+allocation/U. Provisionally cap expected exposure at 5 passes per source.
+For a 1 B budget the caps bind as: arXiv U=152 M → usable ≤ 762 M (76%),
+SE U=108 M → usable ≤ 542 M (54%), Wikipedia U=25 M → usable ≤ 123 M (12%).
+The 60/28/12 mix respects all three. If supply falls short, add eligible
+expository sources or shorten the pilot; discuss changing the mix or raising
+the cap before the full run. Repetition is not equivalent to fresh data, and
+high quality does not prevent memorization.
 tokens U per source and report expected exposure as allocation/U. Sample books
 within the textbook slot in proportion to eligible token counts, not equally
 by book; Feynman is optional pending permissions. Provisionally cap expected

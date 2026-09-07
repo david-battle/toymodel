@@ -41,15 +41,15 @@ rules. Keep changes small.
 - Repo scaffolded, docs written (`TOY_MODEL_PLAN.md`, this file).
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
   (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
-- Corpus pipeline started: `prepare_data.py` (download/extract/clean/tokenize/
-  audit) works for **StackExchange** (~108M tokens, 140k score>=5 threads) and
-  **arXiv ranked-direct** (~152M GPT-2 tokens, 4,900 top-cited papers): rank by
-  citations via OpenAlex, filter to allowed STEM categories via the arXiv API,
-  fetch full text as HTML (arXiv HTML5 else ar5iv), strip to plain text.
+- Corpus pipeline (`prepare_data.py`): **SE (~108M tokens, 140k threads)** and
+  **arXiv ranked-direct (~152M GPT-2 tokens, 4,900 top-cited papers)** and
+  **Wikipedia STEM-titled (~25M tokens, 19,596 articles, hf parquet streaming
+  filtered on title)** all ingested end-to-end. Total supply ≈ 285 M tokens.
   Raw archives are deleted after cleaning (stream-and-discard; corpus/ keeps
   only clean + tokens; `audit` derives counts from corpus/tokens directly).
-  Not yet done: Wikipedia (hf `wikimedia/wikipedia` 20231101.en parquet
-  streaming), textbooks (OpenStax/Wikibooks); full-run mix not confirmed.
+  Textbooks (OpenStax/Wikibooks) were **dropped** — not worth the engineering
+  for the token gain; final **60/28/12 mix** (arXiv/SE/Wikipedia) stays within
+  every 5-pass cap for a 1 B-token budget (see plan §3).
   - SE gotcha: dump filename uses site slugs — `math.stackexchange.com.7z`
     (not `mathematics`), `stats.stackexchange.com.7z` (not `statistics`).
   - lxml `iterparse` gotcha: must `dict(elem.attrib)` before `elem.clear()`;
@@ -62,8 +62,14 @@ rules. Keep changes small.
     (`1412.6980v9`) — strip `v<N>` to match OpenAlex/extracted ids.
   - Citation-ranked arXiv skews to cs/cond-mat/quant-ph; math is ~2% of the
     list. The fetch alternates categories round-robin to keep math/stat.
+  - `wiki-fetch` streams `wikimedia/wikipedia` `20231101.en`, keeps only
+    STEM-titled articles (title regex, Wikipedia/List/disambiguation excluded),
+    appends incrementally and stops at quota; unauthenticated HF can rate-limit
+    (resume-safe — already-kept ids are skipped). Ran a couple of times to
+    finish.
 - **Not yet implemented**: `train.py`, `sample.py`. `benchmark.py` exists but
-  the full sustained timed run is still to be done.
+  the full sustained timed run is still to be done. The corpus is complete
+  (arXiv/SE/Wikipedia, ~285M tokens); next milestone is `train.py`.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files
@@ -77,7 +83,7 @@ rules. Keep changes small.
   fp16 AMP, gradient accumulation, GradScaler). Sanity-checked at 15 s/micro-
   batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
 - `prepare_data.py` — download/extract/clean/tokenize/audit CLI. `se` and
-  `arxiv-rank`/`arxiv-fetch` sources implemented end-to-end.
+  `arxiv-rank`/`arxiv-fetch` and `wiki-fetch` sources implemented end-to-end.
 
 ## Planned files (from plan)
 

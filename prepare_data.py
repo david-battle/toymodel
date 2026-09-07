@@ -448,6 +448,82 @@ def arxiv_fetch(max_tokens, workers):
                 fx.cancel()
     log(f"[arxiv] fetched {kept} papers (~{tok_est/1e6:.0f}M tokens est)")
 
+# ---------------------------------------------------------------------------
+# Wikipedia: stream hf wikimedia/wikipedia, keep STEM-titled articles only
+# ---------------------------------------------------------------------------
+
+STEM_RE = re.compile(
+    r"\b(physics|physical|mathematics|mathematical|math\b|calculus|algebra|"
+    r"geometry|topology|statistics|statistical|probability|probabilistic|"
+    r"analysis\b|differential|integral\b|equation|theorem|theory|function|"
+    r"algorithm|computational|complexity|programming|computing|neural|"
+    r"machine learning|quantum|particle|electromagnet|thermodynamics|"
+    r"mechanics|relativity|astronom|cosmolog|chemistry|chemical|molecule|"
+    r"atomic|protein|genome|biology|evolution|ecology|genetics|neur|tensor|"
+    r"graph\b|number theory|logic|cryptograph|entropy|symmetry|topolog)\b",
+    re.I)
+SKIP_RE = re.compile(
+    r"(disambiguation|^list of|\(film\)|\(album\)|\(song\)|\(novel\)|"
+    r"^wikipedia:|^template:|^category:)", re.I)
+
+
+def _wiki_clean(text):
+    text = " ".join(text.split())
+    lower = text.lower()
+    for marker in END_MARKERS:
+        idx = lower.find(marker)
+        if idx >= 0:
+            text = text[:idx]
+            break
+    return text
+
+
+def wiki_fetch(max_tokens, shards):
+    """Stream the hf en Wikipedia partition, keep only STEM-titled articles,
+    append to clean/wikipedia.jsonl, stop once the token quota is met."""
+    from datasets import load_dataset
+
+    out = CLEAN / "wikipedia.jsonl"
+    done = set()
+    if out.exists():
+        for line in out.open(encoding="utf-8"):
+            done.add(json.loads(line)["id"])
+    log(f"[wiki] {len(done)} articles already kept")
+
+    kept = 0
+    tok = 0
+    seen = 0
+    shard_limit = shards  # None or int of max shards to scan
+    ds = load_dataset("wikimedia/wikipedia", "20231101.en", split="train",
+                      streaming=True)
+    with out.open("a", encoding="utf-8") as fh:
+        for row in ds:
+            cur_shard = int(row.get("id", "0").split("-")[0])
+            if shard_limit is not None and cur_shard >= shard_limit:
+                break
+            if row["id"] in done:
+                continue
+            seen += 1
+            title = row.get("title") or ""
+            if SKIP_RE.search(title) or not STEM_RE.search(title):
+                continue
+            text = _wiki_clean(row.get("text") or "")
+            if len(text) < 500:
+                continue
+            fh.write(json.dumps({
+                "id": row["id"], "url": row.get("url", ""),
+                "title": title, "text": text}, ensure_ascii=False) + "\n")
+            kept += 1
+            tok += len(text) // 4
+            if kept % 1000 == 0:
+                log(f"[wiki] seen {seen}, kept {kept} (~{tok/1e6:.0f}M tok)"
+                    f" shard {cur_shard}")
+            if tok >= max_tokens:
+                log("[wiki] quota reached, stopping")
+                break
+    log(f"[wiki] kept {kept} STEM-titled articles (~{tok/1e6:.0f}M tokens est)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -478,6 +554,11 @@ def main():
     p.add_argument("--max-tokens", type=int, default=120_000_000)
     p.add_argument("--workers", type=int, default=6)
 
+    p = sub.add_parser("wiki-fetch", help="stream Wikipedia, keep STEM titles")
+    p.add_argument("--max-tokens", type=int, default=50_000_000)
+    p.add_argument("--shards", type=int, default=None,
+                   help="stop after N shards (testing)")
+
     sub.add_parser("audit", help="show token supply per source")
 
     args = ap.parse_args()
@@ -497,6 +578,8 @@ def main():
         arxiv_rank(args.top, args.mailto)
     elif args.cmd == "arxiv-fetch":
         arxiv_fetch(args.max_tokens, args.workers)
+    elif args.cmd == "wiki-fetch":
+        wiki_fetch(args.max_tokens, args.shards)
     elif args.cmd == "audit":
         audit()
 
