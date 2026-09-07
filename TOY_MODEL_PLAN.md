@@ -34,18 +34,33 @@ A small decoder-only GPT, nanoGPT-style. Target ~50M params.
 |---|---|
 | `n_layer` | 8 |
 | `n_head` | 8 |
-| `n_embd` | 768 |
+| `n_embd` | 512 |
 | `block_size` (context) | 256 |
-| `vocab_size` | ~50,000 (BPE via `tiktoken` cl100k_base, resized) |
-| Params (approx) | ~50 M |
+| `vocab_size` | 50,257 (GPT-2 BPE via `tiktoken` `gpt2`), padded to 50,304 |
+| Params (approx) | ~51 M (≈25 M transformer blocks + ≈26 M tied embedding/LM head) |
 | Optimizer | AdamW (β₁=0.9, β₂=0.95, weight_decay=0.1) |
-| Precision | fp16 mixed precision (AMP) |
-| Batch | ~16 sequences × 256 tokens ≈ 4,096 tokens/step |
-| LR | cosine schedule, peak ~3e-4, warmup ~500 steps |
+| Precision | fp16 mixed precision (AMP + GradScaler; Turing has no bf16) |
+| Micro-batch | 32 sequences × 256 tokens = 8,192 tokens |
+| Effective batch | ~131k tokens/step via gradient accumulation (×16) |
+| LR | cosine schedule, peak ~6e-4, min ~6e-5, warmup ~500 steps |
 
-**Memory model (fp16 + AdamW ≈ 18 bytes/param)**: 50M × 18 ≈ 0.9 GB for
-weights + optimizer + grads. With activations, well within 8 GB at a ~4k-token
-batch. Headroom exists to raise the batch size if benchmarking shows it.
+**Parameter count check**: non-embedding params ≈ 12·n_layer·n_embd² =
+12·8·512² ≈ 25 M; embedding (tied with the LM head) ≈ 50,304·512 ≈ 26 M.
+Total ≈ 51 M. (At n_embd=768 the same recipe is ≈57 M + 39 M ≈ 95 M — nearly
+double the target.) Half the parameters live in the embedding table, which is
+normal at this scale; a smaller vocab would shift capacity into the blocks but
+GPT-2's tokenizer is the path of least resistance.
+
+**Memory model (AMP + AdamW ≈ 16 bytes/param)**: fp32 master weights (4) +
+fp32 grads (4) + Adam m/v (8) → 51 M × 16 ≈ 0.8 GB. Activations at an 8k-token
+micro-batch add a few GB; well within 8 GB. If benchmarking shows headroom,
+raise the micro-batch (fewer accumulation steps) rather than the effective
+batch.
+
+**Why ~131k tokens/step**: 4k-token steps would mean ~244k noisy optimizer
+steps over 1 B tokens. ~128k tokens/step (≈8k steps for 1 B tokens) is in the
+normal range for a model this size; the cosine schedule should be set by
+`tokens_seen`, not step count, so the batch can change across resumes.
 
 **Why 256 context**: small model, small corpus; longer context dilutes the
 limited weight capacity. 256 is enough to learn local coherence and basic
@@ -55,45 +70,77 @@ grammar.
 
 ## 3. Corpus (the 50/20/20/10 mix)
 
-Lean heavily English, post-1900, STEM. All sources are openly licensed.
+Lean heavily English, post-1900, STEM. Shares are **sampling weights** for the
+data loader (fraction of training tokens drawn from each source), not raw
+corpus sizes — this lets a small high-quality source be upweighted without
+physically duplicating it.
 
-| Share | Source | Role |
-|---|---|---|
-| **50%** | **arXiv open-access papers** (physics, math, CS subsets) | STEM backbone |
-| **20%** | **Feynman Lectures** (feynmanlectures.caltech.edu) | clean explanatory physics prose |
-| **20%** | **English Wikipedia STEM articles** (physics/math/CS/chem categories) | broad modern vocabulary |
-| **10%** | **StackExchange / Reddit STEM Q&A** (AskPhysics, StackOverflow, r/science) | conversational Q&A style |
+| Share | Source | Role | Raw supply |
+|---|---|---|---|
+| **50%** | **arXiv papers** (physics, math, CS) | STEM backbone | billions of tokens — ample |
+| **20%** | **Expository textbooks**: Feynman Lectures + OpenStax STEM texts (CC-BY) + Wikibooks STEM | clean explanatory prose | Feynman ≈ 2 M tokens; OpenStax ≈ 10–20 M; Wikibooks ≈ 10 M+ |
+| **20%** | **English Wikipedia STEM articles** (physics/math/CS/chem/bio categories) | broad modern vocabulary | hundreds of millions — ample |
+| **10%** | **StackExchange STEM Q&A** (physics, math, cs, stats, chemistry, StackOverflow) | conversational Q&A style | hundreds of millions — ample |
+
+**Supply vs. demand.** At the full 1 B-token run, 20 % = 200 M tokens. The
+Feynman Lectures alone are only ~2 M tokens, so they cannot fill that slot (the
+original plan effectively asked for 100 epochs of Feynman). The textbook slot
+is therefore shared with other open expository sources, and the expository slot
+as a whole will still be repeated a few times (~5–10 epochs) at 1 B tokens.
+That is acceptable for a small high-quality source but should be watched: if
+validation loss on held-out Feynman text starts rising while the others fall,
+lower the weight. At the overnight scale (10–50 M tokens) supply is not a
+problem for any source.
 
 ### Curation goals
 The user explicitly wants the *best* papers/articles/questions in the slice,
 not a blind dump. Curation strategy:
 
-1. **arXiv**: restrict to open-access (CC-BY) papers; drop non-STEM categories;
-   filter out metadata/citation noise; prefer highly-cited or "seminal" papers
-   where feasible. Light cleaning: strip LaTeX commands, references, author
-   blocks.
-2. **Wikipedia**: pull only STEM category articles (Category:Physics,
-   Category:Mathematics, Category:Computer science, Category:Chemistry);
-   strip markup/templates/infoboxes.
-3. **Feynman**: clean, high-value prose; minimal cleaning.
-4. **Q&A**: dedupe, drop junk/low-score posts (score threshold), keep the
-   question + top accepted answer.
+1. **arXiv**: do not start from raw LaTeX. Use an existing cleaned full-text
+   arXiv dataset from Hugging Face (e.g. the arXiv subset of RedPajama) and
+   filter by category (`physics.*`, `math.*`, `cs.*`, `quant-ph`, `cond-mat`,
+   `astro-ph`). arXiv itself carries no citation counts; rank/filter by
+   citation count via the OpenAlex or Semantic Scholar API (both free) and
+   keep the top-N per category. Drop reference sections, author blocks, and
+   papers whose text is mostly equations or tables.
+2. **Wikipedia**: from a current dump, keep articles under the STEM category
+   trees (walk 2–3 levels down from Physics, Mathematics, Computer science,
+   Chemistry, Biology). Rank by quality signals: Featured/Good article status,
+   article length, and incoming link count. Strip templates/infoboxes/refs.
+3. **Textbooks**: Feynman (minimal cleaning; strip figure captions/equation
+   numbers), OpenStax (CC-BY, clean HTML/XML), Wikibooks STEM shelves.
+4. **Q&A**: StackExchange data dumps (CC-BY-SA). Keep question + accepted (or
+   top-voted) answer, score ≥ 5, dedupe, drop code-only posts. Reddit is
+   dropped: Pushshift bulk dumps are no longer available and the API is
+   restricted.
+
+### Licensing
+arXiv papers carry per-paper licenses (many are arXiv-perpetual-nonexclusive,
+not CC-BY); OpenStax and Wikibooks are CC-BY / CC-BY-SA; Wikipedia and
+StackExchange are CC-BY-SA; the online Feynman Lectures are Caltech-copyright,
+free to read but not redistributable. This is fine for a personal
+training experiment; keep sources in separate directories so provenance is
+clear, and do not redistribute the corpus.
 
 ### Target size
 - **Start (overnight validation)**: ~10–50 M tokens.
 - **Full run**: ~1 B tokens (20 × 50 M params, Chinchilla-optimal).
 
 Keep the raw slice separate from the tokenized training set so re-tokenizing
-with a different vocab doesn't require re-downloading.
+with a different vocab doesn't require re-downloading. Hold out ~0.5 % of each
+source (by document, not by token) as validation.
 
 ---
 
 ## 4. Tokenization
 
-Use `tiktoken` `cl100k_base` (GPT-4 BPE). Resize/trim vocab to a smaller
-tokenizer (`~50k`) for a lean embedding table — full size not needed for a toy.
-Tokenize the curated corpus offline to `.bin`/`.npy` chunks (like nanoGPT's
-`prepare.py`) so training reads pre-tokenized bytes instead of re-tokenizing.
+Use `tiktoken` `gpt2` (50,257-token BPE). A BPE vocabulary cannot simply be
+"resized" — trimming merges changes the tokenization — so pick a tokenizer
+that is already the right size rather than `cl100k_base` (~100k tokens, which
+would double the embedding table). Tokenize the curated corpus offline to
+`uint16` `.bin` files per source (like nanoGPT's `prepare.py`) so training
+reads pre-tokenized bytes via `np.memmap` instead of re-tokenizing. Append an
+end-of-text token between documents.
 
 ---
 
@@ -109,12 +156,17 @@ Tokenize the curated corpus offline to `.bin`/`.npy` chunks (like nanoGPT's
    back into the time estimates (do this *before* committing to a run length).
 
 ### Throughput expectation
-Estimate: ~20–40k tokens/sec at 50M params on this 80 W-capped card.
-- 1 epoch over 1 B tokens ≈ **~9–14 h**.
-- Chinchilla-optimal 1-epoch run ≈ **~1–2 days**.
-- Multi-epoch over-training ≈ **~3–5 days**.
-**Benchmark first** — the 80 W cap / WSL2 driver can make real numbers 2–3×
-worse than FLOP estimates.
+Training cost ≈ 6·N FLOPs/token ≈ 300 MFLOP/token at N = 51 M. An 80 W
+Max-Q Turing card sustaining ~5–10 TFLOPS of useful fp16 tensor-core work gives
+**~15–35k tokens/sec**; this is an estimate, not a measurement.
+- 1 B tokens at 25k tok/s ≈ **~11 h**; at 15k tok/s ≈ **~19 h**.
+- Chinchilla-optimal single pass over 1 B tokens ≈ **~0.5–1 day** of GPU time,
+  realistically **1–2 days** wall-clock with pauses.
+- Multi-epoch over-training (3–5 passes) ≈ **~3–5 days**.
+**Benchmark first** — the 80 W cap, thermal throttling (the card was already
+at 77 °C idle-ish), and WSL2 overhead can make real numbers 2–3× worse than
+FLOP estimates. Use `torch.compile` and fused AdamW if they work on this
+torch/CUDA combination; check `nvidia-smi` clocks during the benchmark.
 
 ### Run schedule
 1. **Validate pipeline** on a small slice (~10–50 M tokens, ~1 epoch, overnight)
@@ -137,29 +189,40 @@ for other work, then resume exactly where it left off.
 ### Checkpoint contents (`torch.save` of a dict)
 - `model.state_dict()` — weights
 - `optimizer.state_dict()` — Adam m/v (required; else momentum restarts)
-- `step`, `epoch`, `tokens_seen` — resume position
-- scheduler state, RNG states (`torch.get_rng_state()` + CUDA RNG)
+- `step`, `tokens_seen` — resume position (the LR schedule keys off
+  `tokens_seen`)
+- `GradScaler` state (fp16 AMP loss scale)
+- per-source data-loader position/RNG state, plus `torch`/CUDA RNG states
 - best_val / config / timestamp
 - corpus slice id + tokenizer used (so resume matches the right data)
+
+Size: ~51 M params × (4 B weights + 8 B Adam) ≈ **0.6 GB per checkpoint**, so
+rotation matters even with 900 GB free.
 
 ### Mechanics
 - **Atomic save**: write to `ckpt.tmp` then `os.replace()` to final name, so a
   crash mid-write never corrupts the last good checkpoint.
-- **Rotation**: keep `best.pt` + `last.pt`; also a `step-<N>.pt` every N steps.
-  Delete old ones to bound disk.
-- **Cadence**: checkpoint every ~1–2 h (or every N steps) automatically, plus on
-  graceful signal.
+- **Rotation**: keep `best.pt` + `last.pt`; also a `step-<N>.pt` every N steps,
+  keeping only the most recent few.
+- **Cadence**: checkpoint every ~30–60 min (or every N steps) automatically,
+  plus on graceful signal. A save takes a few seconds.
 
 ### Signal handling
-- `train.py` installs a `SIGINT`/`SIGTERM` handler: save checkpoint, then
-  `sys.exit(0)`.
+- `train.py` installs a `SIGINT`/`SIGTERM` handler that only sets a flag; the
+  training loop checks the flag at the end of each optimizer step, saves a
+  checkpoint, and exits. (Saving from inside the handler mid-step could
+  capture a half-updated optimizer.) A second Ctrl-C forces immediate exit
+  without saving.
 - **Ctrl-C to pause** → frees GPU. **Re-run with `--resume ckpt.pt`** to
   continue from the exact step, including optimizer and RNG state.
 
 ### Resume correctness
-- `torch.load(..., weights_only=True, map_location=device)`.
-- Reload model + optimizer state, set LR scheduler to the saved step, advance
-  the data loader past `tokens_seen`.
+- `torch.load(..., weights_only=True, map_location=device)` (the checkpoint
+  holds only tensors and plain Python values, so this works).
+- Reload model, optimizer, and GradScaler state; recompute the LR from the
+  saved `tokens_seen`; restore each source's loader position.
+- Resuming is only bit-exact if the batch size and data mix are unchanged;
+  changing them is allowed but should be logged.
 
 ---
 

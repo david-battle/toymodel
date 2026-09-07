@@ -20,8 +20,13 @@ rules. Keep changes small.
   `.gitignore`). Corpus/checkpoints are the project's point, so they're
   gitignored rather than excluded.
 - GPU: RTX 2080 Super Max-Q, 8 GB VRAM, CUDA 12.7, reachable from WSL2 via
-  torch CUDA. Power-capped at 80 W — expect ~20–40k tokens/sec at 50M params
-  (benchmark before committing to a run length).
+  torch CUDA. Power-capped at 80 W — rough estimate ~15–35k tokens/sec at
+  50M params; **unmeasured** until `benchmark.py` exists. Record the real
+  number here once known.
+- Model recipe: 8 layers × 512 dim, GPT-2 tokenizer (50,257 vocab), ~51 M
+  params. Corpus shares (50/20/20/10) are data-loader sampling weights, not
+  raw sizes — Feynman is only ~2 M tokens and shares the 20 % expository slot
+  with OpenStax/Wikibooks.
 
 ## Current state
 
