@@ -44,12 +44,18 @@ rules. Keep changes small.
 - Corpus pipeline started: `prepare_data.py` (download/extract/clean/tokenize/
   audit) works end-to-end for **StackExchange**; ~108M tokens from 140k
   score>=5 threads (physics/math/chem/stats/cstheory) — comfortably above the
-  ~20M needed for the 10% share under the 5-pass cap. Not yet done: Wikipedia,
-  textbooks (OpenStax/Wikibooks), arXiv; full-run mix not confirmed.
+  ~20M needed for the 10% share under the 5-pass cap. Raw SE archives were
+  deleted after tokenization (stream-and-discard: corpus/ keeps only clean +
+  tokens; `audit` now derives counts from corpus/tokens directly). Not yet
+  done: Wikipedia (hf `wikimedia/wikipedia` 20231101.en parquet streaming),
+  textbooks (OpenStax/Wikibooks), arXiv (SlimPajama dedup subset gated on HF vs
+  RedPajama 86 GB), full-run mix not confirmed.
   - SE gotcha: dump filename uses site slugs — `math.stackexchange.com.7z`
     (not `mathematics`), `stats.stackexchange.com.7z` (not `statistics`).
   - lxml `iterparse` gotcha: must `dict(elem.attrib)` before `elem.clear()`;
     the live attrib dict gets emptied otherwise (kept 0 threads).
+  - arXiv full text has no small open bundle; `arxiv-papers-by-subject` is
+    abstracts-only.
 - **Not yet implemented**: `train.py`, `sample.py`. `benchmark.py` exists but
   the full sustained timed run is still to be done.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.

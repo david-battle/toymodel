@@ -196,22 +196,25 @@ def tokenize(source, clean_file):
 
 def audit():
     rows = []
-    for manifest_line in MANIFEST.open(encoding="utf-8"):
-        rows.append(json.loads(manifest_line))
-    if not rows:
-        log("no tokenized sources yet")
-        return
-    for m in list(rows):
-        off = np.load(TOKENS / f"{m['source']}.offsets.npy")
-        m["docs"] = len(off) - 1
-        m["bytes"] = (TOKENS / f"{m['source']}.bin").stat().st_size
+    if MANIFEST.exists():
+        for manifest_line in MANIFEST.open(encoding="utf-8"):
+            rows.append(json.loads(manifest_line))
+    have = {m["source"] for m in rows}
+    for bin_path in sorted(TOKENS.glob("*.bin")):
+        src = bin_path.stem
+        if src in have:
+            continue
+        off = np.load(TOKENS / f"{src}.offsets.npy")
+        rows.append({"source": src, "docs": len(off) - 1, "tokens": int(off[-1])})
+    rows.sort(key=lambda m: m["source"])
     print(f"{'source':<16}{'docs':>10}{'tokens':>14}{'tokens/M':>10}{'MB':>9}")
     tot_docs = tot_tok = 0
     for m in rows:
-        marr = np.load(TOKENS / f"{m['source']}.offsets.npy")
-        tot_docs += len(marr) - 1
+        off = np.load(TOKENS / f"{m['source']}.offsets.npy")
+        b = (TOKENS / f"{m['source']}.bin").stat().st_size
+        tot_docs += len(off) - 1
         tot_tok += m["tokens"]
-        print(f"{m['source']:<16}{len(marr)-1:>10}{m['tokens']:>14}{m['tokens']/1e6:>10.1f}{m['bytes']/1e6:>9.1f}")
+        print(f"{m['source']:<16}{len(off)-1:>10}{m['tokens']:>14}{m['tokens']/1e6:>10.1f}{b/1e6:>9.1f}")
     print(f"{'TOTAL':<16}{tot_docs:>10}{tot_tok:>14}{tot_tok/1e6:>10.1f}")
 
 
