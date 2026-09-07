@@ -322,6 +322,12 @@ maturity (not bugs):
   generated tokens back (same autoregressive loop as `sample.py`). `sample.py`
   was always correct; the earlier greedy-repetition artifacts came from the
   model, not the loader.
+- **`interact.py` also collapses leading whitespace/newlines.** The model often
+  opens a continuation with a space + line-break token (e.g. after citation-
+  style prompts like "M. C. ") — a literal "stop at first newline" rule then
+  yields an empty line. interact.py instead keeps generating until the
+  *stripped* continuation is non-empty (and is one line / within budget), so
+  output is always at least one line.
 
 ---
 

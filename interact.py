@@ -35,12 +35,12 @@ def complete_line(model, enc, prompt, temperature, top_k, top_p):
             probs = filter_logits(last, temperature, top_k, top_p)
             nxt = int(torch.multinomial(probs, 1).item())
         ctx.append(nxt)
-        if nxt == EOT:
+        eff = enc.decode(ctx[gen0:]).lstrip()
+        if nxt == EOT and eff:
             break
-        text = enc.decode(ctx[gen0:])
-        if "\n" in text or len(text) >= CHAR_BUDGET:
+        if eff and ("\n" in eff or len(eff) >= CHAR_BUDGET):
             break
-    return enc.decode(ctx[gen0:]).split("\n")[0]
+    return enc.decode(ctx[gen0:]).lstrip().split("\n")[0]
 
 
 def main():
