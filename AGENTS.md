@@ -41,8 +41,9 @@ rules. Keep changes small.
 - Repo scaffolded, docs written (`TOY_MODEL_PLAN.md`, this file).
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
   (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
-- **Not yet implemented**: `prepare_data.py`, `benchmark.py`, `train.py`,
-  `sample.py`. No corpus downloaded, no training run started.
+- **Not yet implemented**: `prepare_data.py`, `train.py`, `sample.py`. No
+  corpus downloaded, no training run started. `benchmark.py` exists and is
+  sanity-checked but the full sustained timed run is still to be done.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files
@@ -52,11 +53,13 @@ rules. Keep changes small.
 - `AGENTS.md` — this file.
 - `gpu_smoke.py` — small 51M-param GPT smoke test; verifies the CUDA toolchain
   with a real fp16 training step (loss decreases, gradients finite).
+- `benchmark.py` — sustained tok/s / VRAM / power measurement (synthetic data,
+  fp16 AMP, gradient accumulation, GradScaler). Sanity-checked at 15 s/micro-
+  batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
 
 ## Planned files (from plan)
 
 - `prepare_data.py` — download + curate + tokenize the corpus into token files.
-- `benchmark.py` — measure real tokens/sec on this GPU.
 - `train.py` — nanoGPT-style training loop, fp16 AMP, periodic checkpointing,
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).
