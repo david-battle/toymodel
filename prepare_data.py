@@ -24,14 +24,18 @@ Sources:
 
 import argparse
 import html as html_mod
+import io
 import json
 import re
 import subprocess
 import sys
+import time
 import urllib.request
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
+import requests
 import tiktoken
 
 ROOT = Path(__file__).parent.resolve()
@@ -219,8 +223,230 @@ def audit():
 
 
 # ---------------------------------------------------------------------------
-# main
+# arXiv: ranked-direct-from-arXiv (OpenAlex ranking + ar5iv/arxiv HTML)
 # ---------------------------------------------------------------------------
+
+OPENALEX_ARXIV = "S4306400194"
+ARXIV_ALLOWED = ("physics.", "math.", "cs.", "cond-mat", "astro-ph", "quant-ph",
+                 "stat.", "nlin.")
+ARXIV_RANK_MAX = 200
+
+
+def _arxiv_id_from_url(url):
+    if not url:
+        return None
+    if "arxiv.org/abs/" not in url:
+        return None
+    aid = url.split("arxiv.org/abs/", 1)[1]
+    return re.sub(r"v[0-9]+$", "", aid).strip()
+
+
+def arxiv_rank(top, mailto):
+    """Rank arXiv works by citations (OpenAlex), annotate arXiv categories,
+    keep allowed STEM categories, write corpus/raw/arxiv/ranked.jsonl."""
+    import requests
+    candidates = top * 2  # fetch margin for category filtering
+    works = []
+    cursor = "*"
+    got = 0
+    while got < candidates:
+        params = {
+            "filter": (f"locations.source.id:{OPENALEX_ARXIV},"
+                       "publication_year:2000-2026"),
+            "sort": "cited_by_count:desc",
+            "per-page": ARXIV_RANK_MAX,
+            "cursor": cursor,
+            "mailto": mailto,
+        }
+        r = requests.get("https://api.openalex.org/works", params=params,
+                         timeout=60)
+        r.raise_for_status()
+        data = r.json()
+        batch = data["results"]
+        if not batch:
+            break
+        for w in batch:
+            aid = None
+            for loc in w.get("locations", []):
+                aid = _arxiv_id_from_url((loc.get("landing_page_url") or ""))
+                if aid:
+                    break
+            if aid:
+                works.append({"id": aid, "cited": w.get("cited_by_count", 0)})
+        got += len(batch)
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
+        if got % 2000 < ARXIV_RANK_MAX:
+            log(f"[arxiv] OpenAlex: {got} works seen")
+
+    # dedupe, keep union order
+    seen, ordered = set(), []
+    for w in works:
+        if w["id"] not in seen:
+            seen.add(w["id"])
+            ordered.append(w)
+
+    # batch-annotate arXiv categories via the arXiv API (Atom feed)
+    ATOM = {"a": "http://www.w3.org/2005/Atom",
+            "ax": "http://arxiv.org/schemas/atom"}
+    cats = {}
+    chunk = 300
+    for i in range(0, len(ordered), chunk):
+        ids = ",".join(w["id"] for w in ordered[i:i + chunk])
+        url = (f"http://export.arxiv.org/api/query?id_list={ids}"
+               "&max_results=1000")
+        feed = None
+        for attempt in range(3):
+            try:
+                feed = requests.get(url, timeout=120).text
+                break
+            except Exception:
+                time.sleep(5)
+        try:
+            tree = ET.parse(io.StringIO(feed))
+            for entry in tree.getroot().findall("a:entry", ATOM):
+                eid = entry.findtext("a:id", default="", namespaces=ATOM)
+                aid = re.sub(r"v[0-9]+$", "", eid.split("/")[-1])
+                pc = entry.find("ax:primary_category", ATOM)
+                cats[aid] = pc.get("term") if pc is not None else None
+        except Exception as exc:
+            log(f"[arxiv] category batch {i//chunk} failed: {exc}")
+        if i // chunk and i % (chunk * 5) == 0:
+            log(f"[arxiv] categories: {len(cats)}/{len(ordered)}")
+        time.sleep(3)
+
+    ranked = []
+    dropped = 0
+    for w in ordered:
+        cat = cats.get(w["id"])
+        if not cat or not cat.startswith(ARXIV_ALLOWED):
+            dropped += 1
+            continue
+        w["category"] = cat
+        ranked.append(w)
+    out_dir = RAW / "arxiv"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "ranked.jsonl"
+    with out.open("w", encoding="utf-8") as fh:
+        for w in ranked:
+            fh.write(json.dumps(w) + "\n")
+    log(f"[arxiv] ranked {len(ranked)} papers (dropped {dropped} off-category)"
+        f" -> {out}")
+
+END_MARKERS = ("\nreferences\n", "\nbibliography\n", "\nacknowledgments\n",
+               "\nacknowledgements\n", "\nappendix\n")
+
+
+def _html_to_text(html_bytes):
+    import lxml.html as lh
+    root = lh.fromstring(html_bytes)
+    for tag in ("script", "style", "nav", "header", "footer"):
+        for el in root.xpath(f"//{tag}"):
+            el.drop_tree()
+    for el in root.xpath("//main | //article | //*[@class='ltx_page_main']"):
+        root = el
+        break
+    text = " ".join((root.text_content() or "").split())
+    lower = text.lower()
+    for marker in END_MARKERS:
+        idx = lower.find(marker)
+        if idx >= 0:
+            text = text[:idx]
+            break
+    return text
+
+
+def arxiv_fetch(max_tokens, workers):
+    """Fetch ranked arXiv papers as HTML (arXiv HTML5, else ar5iv), convert to
+    plain text, append to clean/arxiv.jsonl, stop once quota met."""
+    import concurrent.futures as cf
+
+    ranked_file = RAW / "arxiv" / "ranked.jsonl"
+    if not ranked_file.exists():
+        sys.exit("[arxiv] run `arxiv rank` first")
+    papers = [json.loads(l) for l in ranked_file.open(encoding="utf-8")]
+
+    done_ids = set()
+    out = CLEAN / "arxiv.jsonl"
+    if out.exists():
+        for line in out.open(encoding="utf-8"):
+            done_ids.add(json.loads(line)["id"])
+    progress = RAW / "arxiv" / "fetched.log"
+    seen_done = set()
+    if progress.exists():
+        seen_done = {l.strip() for l in progress.open()}
+
+    pending = [p for p in papers if p["id"] not in done_ids
+               and p["id"] not in seen_done]
+    by_cat = {}
+    for p in pending:
+        by_cat.setdefault(p["category"], []).append(p)
+    # round-robin across categories so the citation quota samples every field
+    pending = []
+    buckets = [list(b) for b in by_cat.values()]
+    while any(buckets):
+        for b in buckets:
+            if b:
+                pending.append(b.pop(0))
+    log(f"[arxiv] {len(done_ids)} done, {len(pending)} to fetch "
+        f"(quota {max_tokens/1e6:.0f}M clean tokens)")
+
+    def fetch_one(paper):
+        aid = paper["id"]
+        html = None
+        for base in (f"https://arxiv.org/html/{aid}",
+                     f"https://ar5iv.labs.arxiv.org/html/{aid}"):
+            for attempt in range(2):
+                try:
+                    r = requests.get(base, timeout=45, headers={
+                        "User-Agent": "toymodel-curator/0.1"})
+                    if r.status_code == 200 and len(r.content) > 50_000:
+                        html = r.content
+                        break
+                except Exception:
+                    pass
+                time.sleep(1.5)
+            if html is not None:
+                break
+        if html is None:
+            return None
+        text = _html_to_text(html)
+        if len(text) < 2000:
+            return None
+        return {"id": aid, "category": paper.get("category"),
+                "title": paper.get("title"), "text": text}
+
+    kept = 0
+    tok_est = 0
+    start = time.time()
+    with cf.ThreadPoolExecutor(max_workers=workers) as ex:
+        futs = {ex.submit(fetch_one, p): p for p in pending}
+        try:
+            for fut in cf.as_completed(futs):
+                rec = fut.result()
+                p = futs[fut]
+                progress.open("a").write(p["id"] + "\n")
+                if rec is None:
+                    continue
+                with out.open("a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                n = len(rec["text"]) // 4
+                kept += 1
+                tok_est += n
+                if kept % 50 == 0:
+                    el = time.time() - start
+                    log(f"[arxiv] kept {kept} papers, ~{tok_est/1e6:.0f}M tok, "
+                        f"{el/60:.1f} min")
+                if tok_est >= max_tokens:
+                    log("[arxiv] quota reached, stopping")
+                    for fx in futs:
+                        fx.cancel()
+                    break
+        finally:
+            for fx in futs:
+                fx.cancel()
+    log(f"[arxiv] fetched {kept} papers (~{tok_est/1e6:.0f}M tokens est)")
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
@@ -243,6 +469,15 @@ def main():
     p.add_argument("--source", required=True)
     p.add_argument("--clean", required=True)
 
+    p = sub.add_parser("arxiv-rank", help="rank arXiv by citations, keep STEM")
+    p.add_argument("--top", type=int, default=4000)
+    p.add_argument("--mailto", default="dlbattle@example.com",
+                   help="email for OpenAlex polite pool")
+
+    p = sub.add_parser("arxiv-fetch", help="fetch ranked papers as clean text")
+    p.add_argument("--max-tokens", type=int, default=120_000_000)
+    p.add_argument("--workers", type=int, default=6)
+
     sub.add_parser("audit", help="show token supply per source")
 
     args = ap.parse_args()
@@ -258,6 +493,10 @@ def main():
                 clean_se(site)
     elif args.cmd == "tokenize":
         tokenize(args.source, args.clean)
+    elif args.cmd == "arxiv-rank":
+        arxiv_rank(args.top, args.mailto)
+    elif args.cmd == "arxiv-fetch":
+        arxiv_fetch(args.max_tokens, args.workers)
     elif args.cmd == "audit":
         audit()
 

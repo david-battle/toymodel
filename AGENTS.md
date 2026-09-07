@@ -42,20 +42,26 @@ rules. Keep changes small.
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
   (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
 - Corpus pipeline started: `prepare_data.py` (download/extract/clean/tokenize/
-  audit) works end-to-end for **StackExchange**; ~108M tokens from 140k
-  score>=5 threads (physics/math/chem/stats/cstheory) — comfortably above the
-  ~20M needed for the 10% share under the 5-pass cap. Raw SE archives were
-  deleted after tokenization (stream-and-discard: corpus/ keeps only clean +
-  tokens; `audit` now derives counts from corpus/tokens directly). Not yet
-  done: Wikipedia (hf `wikimedia/wikipedia` 20231101.en parquet streaming),
-  textbooks (OpenStax/Wikibooks), arXiv (SlimPajama dedup subset gated on HF vs
-  RedPajama 86 GB), full-run mix not confirmed.
+  audit) works for **StackExchange** (~108M tokens, 140k score>=5 threads) and
+  **arXiv ranked-direct** (~152M GPT-2 tokens, 4,900 top-cited papers): rank by
+  citations via OpenAlex, filter to allowed STEM categories via the arXiv API,
+  fetch full text as HTML (arXiv HTML5 else ar5iv), strip to plain text.
+  Raw archives are deleted after cleaning (stream-and-discard; corpus/ keeps
+  only clean + tokens; `audit` derives counts from corpus/tokens directly).
+  Not yet done: Wikipedia (hf `wikimedia/wikipedia` 20231101.en parquet
+  streaming), textbooks (OpenStax/Wikibooks); full-run mix not confirmed.
   - SE gotcha: dump filename uses site slugs — `math.stackexchange.com.7z`
     (not `mathematics`), `stats.stackexchange.com.7z` (not `statistics`).
   - lxml `iterparse` gotcha: must `dict(elem.attrib)` before `elem.clear()`;
     the live attrib dict gets emptied otherwise (kept 0 threads).
-  - arXiv full text has no small open bundle; `arxiv-papers-by-subject` is
-    abstracts-only.
+  - The HF RedPajama-1T repo is pointer-only (data at `data.together.xyz`,
+    86 GB, raw LaTeX, no category) and `arxiv-papers-by-subject` is
+    abstracts-only; ranked-direct is the cheap full-text route.
+  - OpenAlex arXiv source id is `S4306400194`; `page` is capped at 50 so large
+    ranking must use cursor pagination. The arXiv API returns versioned ids
+    (`1412.6980v9`) — strip `v<N>` to match OpenAlex/extracted ids.
+  - Citation-ranked arXiv skews to cs/cond-mat/quant-ph; math is ~2% of the
+    list. The fetch alternates categories round-robin to keep math/stat.
 - **Not yet implemented**: `train.py`, `sample.py`. `benchmark.py` exists but
   the full sustained timed run is still to be done.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
@@ -70,8 +76,8 @@ rules. Keep changes small.
 - `benchmark.py` — sustained tok/s / VRAM / power measurement (synthetic data,
   fp16 AMP, gradient accumulation, GradScaler). Sanity-checked at 15 s/micro-
   batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
-- `prepare_data.py` — download/extract/clean/tokenize/audit CLI; SE source
-  implemented end-to-end.
+- `prepare_data.py` — download/extract/clean/tokenize/audit CLI. `se` and
+  `arxiv-rank`/`arxiv-fetch` sources implemented end-to-end.
 
 ## Planned files (from plan)
 
