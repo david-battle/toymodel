@@ -315,6 +315,13 @@ maturity (not bugs):
   LaTeX syntax is consistent with that choice, not a cleanup failure.
 - `<|endoftext|>` was never emitted, so the EOT-stop path is code-review-only;
   all pilot samples ran to `--max-new-tokens`.
+- **BUG (found 2026-09-07, fixed): `interact.py`** initially kept generated
+  tokens in a separate list and re-queried the model on the prompt alone, so
+  each token was an independent draw from the same next-word distribution —
+  producing misdiagnosed function-word soup ("of of of of"). Fixed by feeding
+  generated tokens back (same autoregressive loop as `sample.py`). `sample.py`
+  was always correct; the earlier greedy-repetition artifacts came from the
+  model, not the loader.
 
 ---
 

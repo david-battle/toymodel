@@ -21,8 +21,8 @@ CHAR_BUDGET = 80
 
 def complete_line(model, enc, prompt, temperature, top_k, top_p):
     ctx = enc.encode(prompt, allowed_special={"<|endoftext|>"})
-    max_new = max(0, BLOCK - len(ctx))
-    gen_toks = []
+    gen0 = len(ctx)
+    max_new = max(0, BLOCK - gen0)
     for _ in range(max_new):
         window = ctx[-BLOCK:]
         x = torch.tensor(window, dtype=torch.long, device=DEV).unsqueeze(0)
@@ -34,13 +34,13 @@ def complete_line(model, enc, prompt, temperature, top_k, top_p):
         else:
             probs = filter_logits(last, temperature, top_k, top_p)
             nxt = int(torch.multinomial(probs, 1).item())
-        gen_toks.append(nxt)
+        ctx.append(nxt)
         if nxt == EOT:
             break
-        text = enc.decode(gen_toks)
+        text = enc.decode(ctx[gen0:])
         if "\n" in text or len(text) >= CHAR_BUDGET:
             break
-    return enc.decode(gen_toks).split("\n")[0]
+    return enc.decode(ctx[gen0:]).split("\n")[0]
 
 
 def main():
