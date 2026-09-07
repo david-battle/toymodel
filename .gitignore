@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Training artifacts (never commit large files)
+corpus/
+*.bin
+*.npy
+*.pt
+logs/
+*.log
