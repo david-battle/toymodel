@@ -391,6 +391,7 @@ rotation matters even with 900 GB free.
    (see §3). Total ≈ 285M tokens.
 4. `train.py` with checkpointing + suspend/resume. ✅ (smoke-verified: fresh
    run, resume, SIGTERM-pause → resume, `--no-accumulate`)
-5. `sample.py`.
+5. `sample.py`. ✅ (rough-in written, logic sanity-checked on CPU/CUDA without
+   a checkpoint; recheck against a real checkpoint after the pilot)
 6. Overnight validation run on a small slice.
 7. Full 1 B-token run.

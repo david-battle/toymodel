@@ -98,10 +98,13 @@ rules. Keep changes small.
 - `train.py` — nanoGPT-style training loop, fp16 AMP, periodic checkpointing,
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).
+- `sample.py` — text generation from a checkpoint (best.pt weights-only or
+  last.pt full), temperature/top-k/top-p; rough-in pending recheck after the
+  pilot run.
 
 ## Planned files (from plan)
 
-- `sample.py` — text generation from a checkpoint.
+(none — sample.py rough-in done; plan milestone 6: overnight validation run)
 
 ## Suspend / resume (implemented in `train.py`)
 
