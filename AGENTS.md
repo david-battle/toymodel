@@ -41,9 +41,17 @@ rules. Keep changes small.
 - Repo scaffolded, docs written (`TOY_MODEL_PLAN.md`, this file).
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
   (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
-- **Not yet implemented**: `prepare_data.py`, `train.py`, `sample.py`. No
-  corpus downloaded, no training run started. `benchmark.py` exists and is
-  sanity-checked but the full sustained timed run is still to be done.
+- Corpus pipeline started: `prepare_data.py` (download/extract/clean/tokenize/
+  audit) works end-to-end for **StackExchange**; ~108M tokens from 140k
+  score>=5 threads (physics/math/chem/stats/cstheory) — comfortably above the
+  ~20M needed for the 10% share under the 5-pass cap. Not yet done: Wikipedia,
+  textbooks (OpenStax/Wikibooks), arXiv; full-run mix not confirmed.
+  - SE gotcha: dump filename uses site slugs — `math.stackexchange.com.7z`
+    (not `mathematics`), `stats.stackexchange.com.7z` (not `statistics`).
+  - lxml `iterparse` gotcha: must `dict(elem.attrib)` before `elem.clear()`;
+    the live attrib dict gets emptied otherwise (kept 0 threads).
+- **Not yet implemented**: `train.py`, `sample.py`. `benchmark.py` exists but
+  the full sustained timed run is still to be done.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files
@@ -56,6 +64,8 @@ rules. Keep changes small.
 - `benchmark.py` — sustained tok/s / VRAM / power measurement (synthetic data,
   fp16 AMP, gradient accumulation, GradScaler). Sanity-checked at 15 s/micro-
   batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
+- `prepare_data.py` — download/extract/clean/tokenize/audit CLI; SE source
+  implemented end-to-end.
 
 ## Planned files (from plan)
 
