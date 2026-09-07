@@ -2,7 +2,8 @@
 
 Loads the model once, then reads one line at a time from stdin and prints a
 single-line continuation of up to CHAR_BUDGET chars, stopping early if the
-model emits an <|endoftext|> token or a newline. `quit`/`exit` or Ctrl-D ends.
+model emits an <|endoftext|> token or a newline. A blank line generates an
+unconditional continuation; `quit`/`exit` or Ctrl-D ends.
 
 Usage:
   .venv/bin/python interact.py [--ckpt ckpt/best.pt]
@@ -17,13 +18,13 @@ from sample import EOT, filter_logits, load_model
 from train import BLOCK, DEV
 
 CHAR_BUDGET = 80
+HEADROOM = 32  # tokens reserved for the response when the prompt fills the window
+BLANK_SEEDS = ("The", "A")  # a continuation model has no BOS; blank lines get an opener
 
 
-def complete_line(model, enc, prompt, temperature, top_k, top_p):
-    ctx = enc.encode(prompt, allowed_special={"<|endoftext|>"})
+def _generate(model, enc, ctx, temperature, top_k, top_p):
     gen0 = len(ctx)
-    max_new = max(0, BLOCK - gen0)
-    for _ in range(max_new):
+    for _ in range(BLOCK - gen0):
         window = ctx[-BLOCK:]
         x = torch.tensor(window, dtype=torch.long, device=DEV).unsqueeze(0)
         with torch.amp.autocast("cuda", dtype=torch.float16), torch.no_grad():
@@ -40,7 +41,19 @@ def complete_line(model, enc, prompt, temperature, top_k, top_p):
             break
         if eff and ("\n" in eff or len(eff) >= CHAR_BUDGET):
             break
-    return enc.decode(ctx[gen0:]).lstrip().split("\n")[0]
+    return enc.decode(ctx[gen0:]).lstrip().split("\n")[0][:CHAR_BUDGET]
+
+
+def complete_line(model, enc, prompt, temperature, top_k, top_p):
+    if not prompt.strip():
+        for seed in BLANK_SEEDS:
+            out = _generate(model, enc, enc.encode(seed), temperature, top_k, top_p)
+            if out:
+                return out
+        return ""
+    ctx = enc.encode(prompt, allowed_special={"<|endoftext|>"})
+    ctx = ctx[-(BLOCK - HEADROOM):]  # long prompts keep only the recent tail
+    return _generate(model, enc, ctx, temperature, top_k, top_p)
 
 
 def main():
@@ -61,9 +74,10 @@ def main():
         except EOFError:
             print()
             break
-        if not prompt.strip() or prompt.strip().lower() in ("quit", "exit"):
-            if prompt.strip().lower() in ("quit", "exit"):
-                print("bye")
+        if not prompt.strip():
+            prompt = ""  # blank line = unconditional continuation
+        elif prompt.strip().lower() in ("quit", "exit"):
+            print("bye")
             break
         out = complete_line(model, enc, prompt, args.temperature,
                             args.top_k, args.top_p)

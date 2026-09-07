@@ -328,6 +328,13 @@ maturity (not bugs):
   yields an empty line. interact.py instead keeps generating until the
   *stripped* continuation is non-empty (and is one line / within budget), so
   output is always at least one line.
+- **No BOS token in this model**: unconditional generation from an empty/blank
+  prompt is not a well-posed operation — the model just emits a stream of
+  `<|endoftext|>`/whitespace tokens (decodes to `""`). `sample.py` and
+  `interact.py` both seed empty prompts with a neutral opener (`The`; detect a
+  `--prompt ""` or blank line). Long prompts (>=BLOCK tokens) are windowed to
+  the recent tail with 32 tokens reserved for the response, and output is
+  trimmed to the char budget.
 
 ---
 

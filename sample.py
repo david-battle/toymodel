@@ -68,6 +68,8 @@ def filter_logits(logits, temperature, top_k, top_p):
 
 def sample_one(model, enc, prompt, max_new, temperature, top_k, top_p, gen):
     ctx = enc.encode(prompt, allowed_special={"<|endoftext|>"})
+    if not ctx:
+        ctx = enc.encode("The")  # no BOS in this model; seed empty prompts
     for _ in range(max_new):
         window = ctx[-BLOCK:]
         x = torch.tensor(window, dtype=torch.long, device=DEV).unsqueeze(0)
