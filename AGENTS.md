@@ -12,6 +12,14 @@ rules. Keep changes small.
   (already done), leave `git push` to the user. `push` is the user's shell
   script that pushes all their repos; don't substitute a plain `git push` when
   the user types a `(cd .. ; push )` line — run the script exactly as given.
+- **Start background training only via `./run_training.sh`.** A bare
+  `python train.py &` (or `nohup ... &`) keeps the launching shell/tool open
+  waiting on the child's inherited stdout and trips timeouts. The script uses
+  `setsid` + a log redirect of ALL three fds (`>log 2>&1 </dev/null`), which
+  detaches the run into its own session so it survives the shell that started
+  it. Launch with `./run_training.sh` (defaults are the ~30 min pilot) and add
+  extra `train.py` args to override. Pause with `kill -TERM $(cat
+  logs/pilot.pid)` (checkpoint + exit); resume with `--resume ckpt/last.pt`.
 - Python is **3.14.4**; use the project venv at `.venv/`. **Verified toolchain**:
   `torch==2.14.0+cu126` installed from the `download.pytorch.org/whl/cu126`
   index (NOT the PyPI default, which is `+cu130` and requires a newer driver
