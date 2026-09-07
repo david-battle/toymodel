@@ -20,11 +20,13 @@ from train import BLOCK, DEV
 CHAR_BUDGET = 80
 HEADROOM = 32  # tokens reserved for the response when the prompt fills the window
 BLANK_SEEDS = ("The", "A")  # a continuation model has no BOS; blank lines get an opener
+RETRIES = 5
+GIVE_UP_EMPTY = 16  # leading tokens still blank after this => model won't escape
 
 
 def _generate(model, enc, ctx, temperature, top_k, top_p):
     gen0 = len(ctx)
-    for _ in range(BLOCK - gen0):
+    for i in range(BLOCK - gen0):
         window = ctx[-BLOCK:]
         x = torch.tensor(window, dtype=torch.long, device=DEV).unsqueeze(0)
         with torch.amp.autocast("cuda", dtype=torch.float16), torch.no_grad():
@@ -41,19 +43,26 @@ def _generate(model, enc, ctx, temperature, top_k, top_p):
             break
         if eff and ("\n" in eff or len(eff) >= CHAR_BUDGET):
             break
+        if not eff and i >= GIVE_UP_EMPTY:
+            return ""  # stuck emitting <|endoftext|>/whitespace; caller retries
     return enc.decode(ctx[gen0:]).lstrip().split("\n")[0][:CHAR_BUDGET]
 
 
 def complete_line(model, enc, prompt, temperature, top_k, top_p):
     if not prompt.strip():
         for seed in BLANK_SEEDS:
-            out = _generate(model, enc, enc.encode(seed), temperature, top_k, top_p)
-            if out:
-                return out
+            for _ in range(RETRIES):
+                out = _generate(model, enc, enc.encode(seed), temperature, top_k, top_p)
+                if out:
+                    return out
         return ""
     ctx = enc.encode(prompt, allowed_special={"<|endoftext|>"})
     ctx = ctx[-(BLOCK - HEADROOM):]  # long prompts keep only the recent tail
-    return _generate(model, enc, ctx, temperature, top_k, top_p)
+    for _ in range(RETRIES):
+        out = _generate(model, enc, list(ctx), temperature, top_k, top_p)
+        if out:
+            return out
+    return ""
 
 
 def main():
