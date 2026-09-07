@@ -126,6 +126,23 @@ expository sources or shorten the pilot; discuss changing the 50/20/20/10 mix
 or raising the cap before the full run. Repetition is not equivalent to fresh
 data, and high quality does not prevent memorization.
 
+**Source availability & formats (verified 2026-09-07).** All hosts reachable.
+Toolchain adds: `tiktoken`, `zstandard`, `datasets`, `pyarrow`, `lxml` in the
+venv; system `7z` (7zip 26.00). Note the RedPajama repo on HF now publishes
+only `urls/*.txt` pointer files; the data itself is at
+`https://data.together.xyz/redpajama-data-1T/v1.0.0/arxiv/arxiv_<uuid>.jsonl`
+(plain JSONL, 99 shards, ~86 GB; records carry
+`text` = LaTeX source and `meta`: `arxiv_id`, `timestamp`, `language`, `url`
+— **no paper category and no per-paper license**, so a join to arXiv metadata
+(e.g. the `arxiv-metadata-oai` file) is required to filter physics/math/cs).
+Current wikimedia dumps exist monthly; enwiki `20260901` multistream is ~25 GB
+compressed over 27 `multistreamN` shards (~300-600 MB each). StackExchange dumps
+are a single archive.org item (`stackexchange`), one `<slug>.stackexchange.com.7z`
+per site; use slugs `math` (not `mathematics`) and `stats` (not `statistics`);
+StackOverflow is split into per-table files (`Posts.7z` ~23 GB) and is
+unnecessary for the 10% share. OpenStax book pages and enwikibooks dumps are
+reachable. Feynman is excluded pending permission review.
+
 ### Curation goals
 The user explicitly wants the *best* papers/articles/questions in the slice,
 not a blind dump. Curation strategy:
@@ -357,6 +374,8 @@ rotation matters even with 900 GB free.
 2. Minimal model + CUDA training smoke test ✅ (`gpu_smoke.py`), then
    `benchmark.py` for sustained tokens/sec.
 3. `prepare_data.py` + corpus downloader/curator and measured supply audit.
+   StackExchange source done (~108M tokens at score>=5); Wikipedia, textbooks
+   (OpenStax/Wikibooks) and arXiv (category-joined) still to build.
 4. `train.py` with checkpointing + suspend/resume.
 5. `sample.py`.
 6. Overnight validation run on a small slice.

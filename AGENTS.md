@@ -69,7 +69,6 @@ rules. Keep changes small.
 
 ## Planned files (from plan)
 
-- `prepare_data.py` — download + curate + tokenize the corpus into token files.
 - `train.py` — nanoGPT-style training loop, fp16 AMP, periodic checkpointing,
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).
