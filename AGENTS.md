@@ -1,8 +1,8 @@
 # toymodel
 
 Personal toy language-model project: a ~50M-param decoder-only GPT trained on a
-curated English, post-1900, STEM corpus (arXiv / Feynman / Wikipedia STEM /
-STEM Q&A) using the local RTX 2080 Super Max-Q (8 GB) in WSL2. Authoritative
+curated English, post-1900, STEM corpus (arXiv / open textbooks / Wikipedia
+STEM / STEM Q&A) using the local RTX 2080 Super Max-Q (8 GB) in WSL2. Authoritative
 design is in `TOY_MODEL_PLAN.md`; this file records current state and working
 rules. Keep changes small.
 
@@ -22,11 +22,15 @@ rules. Keep changes small.
   `.bin`/`.npy` files, checkpoints, logs. Commit code + docs only (see
   `.gitignore`). Corpus/checkpoints are the project's point, so they're
   gitignored rather than excluded.
-- GPU: RTX 2080 Super Max-Q, 8 GB VRAM, observed 80 W cap. nvidia-smi
-  reports CUDA 12.7 driver capability. **Verified** working CUDA via torch;
-  measured ~27k tokens/sec at 51M params, 8×256 micro-batch, 2.3 GB peak VRAM
-  (single-step, no accumulation). Record sustained benchmark results once
-  `benchmark.py` measures them.
+- GPU: RTX 2080 Super Max-Q, 8 GB VRAM (≈1 GB held by Xwayland), observed
+  80 W cap, compute capability 7.5. **Verified** working CUDA via torch;
+  `gpu_smoke.py` measures ~28k tokens/sec at 51M params, 8×256 micro-batch,
+  2.3 GB peak VRAM (20-step burst, no accumulation, synthetic data). Treat as
+  an upper bound until `benchmark.py` measures a sustained run.
+- Precision is **fp16 AMP**, not bf16: Turing has no bf16 tensor cores;
+  measured bf16 autocast ≈3.6× slower (`is_bf16_supported()` is misleading).
+- With tied embeddings, use nanoGPT-style init (std 0.02, scaled residual
+  projections); PyTorch's default embedding init gives an initial loss of 50+.
 - Model recipe: 8 layers × 512 dim, GPT-2 tokenizer (50,257 vocab), ~51 M
   params. Corpus shares (50/20/20/10) are data-loader sampling weights, not
   raw sizes. Textbook supply must be measured; Feynman is optional pending
@@ -36,7 +40,7 @@ rules. Keep changes small.
 
 - Repo scaffolded, docs written (`TOY_MODEL_PLAN.md`, this file).
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
-  (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~27k tok/s).
+  (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
 - **Not yet implemented**: `prepare_data.py`, `benchmark.py`, `train.py`,
   `sample.py`. No corpus downloaded, no training run started.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
@@ -57,7 +61,6 @@ rules. Keep changes small.
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).
 - `sample.py` — text generation from a checkpoint.
-- `gpu_smoke.py` — implemented (see Files above).
 
 ## Suspend / resume (planned, not implemented)
 

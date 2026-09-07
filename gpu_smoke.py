@@ -1,7 +1,20 @@
+"""CUDA toolchain smoke test.
+
+Builds the plan's ~51M-param GPT shape and runs real fp16 AMP
+forward/backward/AdamW steps on synthetic tokens. Verifies that the
+torch/CUDA stack works on this GPU (loss starts near ln(vocab), decreases,
+params stay finite) and prints a short-burst tokens/sec figure. It is a
+toolchain check, not the training recipe: no weight-decay grouping, no
+accumulation, no real data.
+
+Run: .venv/bin/python gpu_smoke.py
+"""
+
+import math
 import time
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 torch.manual_seed(0)
 
@@ -11,7 +24,6 @@ N_LAYER = 8
 N_HEAD = 8
 N_EMBD = 512
 BLOCK = 256
-N_PARAM = None
 
 
 class Block(nn.Module):
@@ -27,7 +39,9 @@ class Block(nn.Module):
         )
 
     def forward(self, x, mask):
-        attn_out, _ = self.attn(x, x, x, attn_mask=mask, need_weights=False)
+        # pre-LayerNorm residual block (returns the full residual stream)
+        h = self.ln1(x)
+        attn_out, _ = self.attn(h, h, h, attn_mask=mask, need_weights=False)
         x = x + attn_out
         x = x + self.mlp(self.ln2(x))
         return x
@@ -49,7 +63,7 @@ class MiniGPT(nn.Module):
         x = self.tok(idx) + self.pos(pos)
         mask = torch.triu(torch.full((T, T), float("-inf"), device=DEV), diagonal=1)
         for blk in self.blocks:
-            x = x + blk(x, mask) * (1.0 / N_LAYER) ** 0.5
+            x = blk(x, mask)
         return self.head(self.ln_f(x))
 
 
@@ -61,12 +75,15 @@ def main():
     model = MiniGPT().to(DEV)
     n = count_params(model)
     print(f"params: {n/1e6:.2f}M")
-    # nanoGPT-style init: keep logits ~ O(1)
+    # nanoGPT-style init: std 0.02 everywhere, residual output projections
+    # scaled by 1/sqrt(2*n_layer) so the residual stream stays ~O(1).
     for p in model.parameters():
         if p.dim() >= 2:
             torch.nn.init.normal_(p, 0.0, 0.02)
+    proj_std = 0.02 / (2 * N_LAYER) ** 0.5
     for blk in model.blocks:
-        torch.nn.init.normal_(blk.mlp[-1].weight, 0.0, 0.02 / (2 * N_LAYER) ** 0.5)
+        torch.nn.init.normal_(blk.attn.out_proj.weight, 0.0, proj_std)
+        torch.nn.init.normal_(blk.mlp[-1].weight, 0.0, proj_std)
 
     scaler = torch.amp.GradScaler("cuda")
     opt = torch.optim.AdamW(model.parameters(), lr=6e-4, betas=(0.9, 0.95), weight_decay=0.1)
@@ -81,7 +98,7 @@ def main():
     # report loss before training
     with torch.amp.autocast("cuda", dtype=torch.float16):
         loss0 = lossf(model(idx).view(-1, VOCAB), target.view(-1)).item()
-    print(f"initial loss: {loss0:.3f}  (random ~= {torch.log(torch.tensor(VOCAB)).item():.2f})")
+    print(f"initial loss: {loss0:.3f}  (uniform over vocab = {math.log(VOCAB):.2f})")
 
     # warmup a few steps
     for _ in range(5):

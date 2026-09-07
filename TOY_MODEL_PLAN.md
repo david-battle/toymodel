@@ -8,24 +8,27 @@ working rules).
 
 ---
 
-## 1. Hardware & environment (initial observations)
+## 1. Hardware & environment (verified 2026-09-07)
 
 | Item | Value |
 |---|---|
-| GPU | NVIDIA GeForce RTX 2080 Super (Max-Q), **8 GB VRAM** |
+| GPU | NVIDIA GeForce RTX 2080 Super (Max-Q), **8 GB VRAM**, compute capability 7.5 (Turing) |
 | Driver / CUDA | Driver 566.03; nvidia-smi reports CUDA 12.7 driver capability |
 | Host | WSL2 (Linux 6.18 msft), ~27 GB RAM |
-| Python | 3.14.4 |
-| torch | 2.14.0 proposed; package index listing seen, installation untested |
+| Python | 3.14.4, project venv at `.venv/` |
+| torch | **2.14.0+cu126** (CUDA 12.6 runtime, cuDNN 9.10), numpy 2.5.3 |
 | Disk | ~936 GB free |
 
-**GPU access note**: nvidia-smi sees the GPU in WSL2; this does not yet verify
-PyTorch CUDA execution. Its CUDA version is not an installed toolkit version.
-In a project venv, verify wheel support for Python 3.14 and the GPU's Turing
-architecture (sm_75), driver/runtime compatibility, and a real fp16
-forward/backward/AdamW step. Record working versions; do not upgrade host
-drivers as part of setup without approval. The observed power cap is 80 W,
-not a WSL2-specific limit. Display applications also consume VRAM.
+**Toolchain gotcha**: the PyPI default `torch==2.14.0` wheel is built for CUDA
+13.0 (`+cu130`) and fails `torch.cuda.is_available()` on this driver ("driver
+too old"). Install from the CUDA 12.6 index instead:
+`pip install torch==2.14.0+cu126 --index-url https://download.pytorch.org/whl/cu126`.
+Do not upgrade host drivers as part of setup without approval.
+
+**Verified** by `gpu_smoke.py`: real fp16 AMP forward/backward/AdamW steps on
+the 51 M-param model shape run on the GPU with finite params and a decreasing
+loss. The observed power cap is 80 W, not a WSL2-specific limit. Display
+applications (Xwayland) hold ~1 GB of VRAM, so budget for ~7 GB usable.
 
 ---
 
@@ -42,7 +45,7 @@ A small decoder-only GPT, nanoGPT-style. Target ~50M params.
 | `vocab_size` | 50,257 (GPT-2 BPE via `tiktoken` `gpt2`), padded to 50,304 |
 | Params (approx) | ~51 M (≈25 M transformer blocks + ≈26 M tied embedding/LM head) |
 | Optimizer | AdamW (β₁=0.9, β₂=0.95, weight_decay=0.1) |
-| Precision | fp16 mixed precision (AMP + GradScaler; Turing has no bf16) |
+| Precision | fp16 mixed precision (AMP + GradScaler); see bf16 note below |
 | Micro-batch | Start at 4-8 sequences x 256 tokens; benchmark up to 32 |
 | Effective batch | ~131k tokens/update via gradient accumulation |
 | LR | cosine schedule, peak ~6e-4, min ~6e-5, warmup 2% of run tokens |
@@ -51,6 +54,18 @@ Use pre-LayerNorm blocks, GELU MLPs of width 4x the embedding dimension,
 learned positional embeddings, causal attention, tied input/output weights,
 and initially zero dropout. Exclude biases and LayerNorm weights from weight
 decay. These choices make the parameter estimate reproducible.
+
+**Init matters with tied embeddings**: PyTorch's default `nn.Embedding` init is
+N(0, 1), which makes the tied LM head produce logits with std ~30 and an initial
+loss of 50+ instead of ln(50304) ≈ 10.8. Use nanoGPT-style init (std 0.02 for
+all matrices, residual output projections scaled by 1/sqrt(2·n_layer)); the
+smoke test confirms this gives an initial loss ≈ 10.9.
+
+**Why fp16, not bf16 (measured)**: Turing has fp16 tensor cores but no bf16
+tensor cores (bf16 arrived with Ampere). `torch.cuda.is_bf16_supported()`
+returns True on this card because bf16 *kernels* exist, but they run emulated:
+on the smoke-test model bf16 autocast measured ~8.2k tok/s vs ~29k tok/s for
+fp16 (~3.6x slower). fp16 + GradScaler is the correct choice here.
 
 **Parameter count check**: non-embedding params ≈ 12·n_layer·n_embd² =
 12·8·512² ≈ 25 M; embedding (tied with the LM head) ≈ 50,304·512 ≈ 26 M.
@@ -214,9 +229,15 @@ the actual EOT ID. Store document offsets alongside token files for auditing.
 
 ### Throughput expectation
 Training cost is roughly 6*N FLOPs/token (~306 MFLOP at 51 M), but this
-ignores attention overhead and cannot predict achieved throughput. The earlier
-15-35k tokens/sec range assumes unmeasured useful compute and is not a planning
-guarantee. Sensitivity for 1 B consumed tokens:
+ignores attention overhead and cannot predict achieved throughput.
+
+**Measured so far (short burst, not sustained)**: `gpu_smoke.py` runs the
+51 M model at **~28k tok/s** (73 ms/step) with an 8x256 micro-batch, fp16 AMP,
+no gradient accumulation, synthetic tokens, 20 timed steps, peak 2.3 GB
+allocated. This is an upper bound on the planning number: it excludes data
+loading, evaluation, checkpointing, accumulation overhead and any thermal
+throttling over hours. `benchmark.py` must measure a sustained run.
+Sensitivity for 1 B consumed tokens:
 
 | Measured training rate | GPU training time |
 |---|---|
@@ -320,7 +341,8 @@ rotation matters even with 900 GB free.
 
 ## 7. Operational conventions (also in AGENTS.md)
 
-- Python 3.14; use a project venv (`.venv/`) with `torch 2.14.0`.
+- Python 3.14; use the project venv (`.venv/`) with `torch 2.14.0+cu126`
+  from the cu126 index (see §1 toolchain gotcha).
 - Commits: **assistant commits; user pushes** (per personal working agreement —
   `push` is the user's multi-repo script).
 - Never commit large artifacts: `.venv/`, downloaded corpora, tokenized `.bin`
@@ -331,8 +353,9 @@ rotation matters even with 900 GB free.
 
 ## 8. Deliverables / milestones
 
-1. Repo scaffold + docs (this file + AGENTS.md). ✅ (initial commit)
-2. Minimal model + CUDA training smoke test, then `benchmark.py` for real tokens/sec.
+1. Repo scaffold + docs (this file + AGENTS.md). ✅
+2. Minimal model + CUDA training smoke test ✅ (`gpu_smoke.py`), then
+   `benchmark.py` for sustained tokens/sec.
 3. `prepare_data.py` + corpus downloader/curator and measured supply audit.
 4. `train.py` with checkpointing + suspend/resume.
 5. `sample.py`.
