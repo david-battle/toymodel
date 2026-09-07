@@ -95,8 +95,12 @@ nonfinite loss require diagnosis, not silent continuation.
 
 **Why 256 context**: a cheap baseline for local coherence, not a claim that
 longer context dilutes capacity. It truncates many STEM arguments and Q&A
-pairs. Benchmark 512 as a possible alternative before fixing the full-run
-architecture; changing learned positional embeddings is not an exact resume.
+pairs. **Decision (2026-09-07): 256 is settled for this project.** The 50M
+pilot already sat at ~7.8 GB VRAM at micro-batch 16, so 512 would force a
+smaller micro-batch and add cost for uncertain benefit. A 512 benchmark (via a
+one-off edit or a future `--block` knob) is **deferred/optional** — only worth
+it as a separate experiment after the toy works, since learned positional
+embeddings make context a fresh-run (not resume) choice anyway.
 
 ---
 
