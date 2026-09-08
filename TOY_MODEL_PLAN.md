@@ -336,6 +336,17 @@ maturity (not bugs):
   the recent tail with 32 tokens reserved for the response, and output is
   trimmed to the char budget.
 
+### 5d. Prediction log (opaque on purpose; check after the overnight run)
+
+- **2026-09-07, ~21:50, overnight run at 348M tokens, wiki eval = 5.51.**
+  Prediction: **wiki eval will NOT cross under 4.0 by run end (~1.05B tokens)**.
+  Expect it to land **~4.1-4.4** (aggregate ~3.6-3.8). Basis: recent rate
+  ~0.05 nat/10M tokens at high LR, but cosine LR decays to 6e-5 over the night
+  and prose saturates near the model's capacity floor. A linear extrapolation
+  says "under 4 easily", a saturation+LR-decay fit says "~4.2". Treat under-4.0
+  as a coin flip at best. Verify against the final eval when the run ends; log
+  the outcome here for calibration.
+
 ---
 
 ## 6. Suspend / resume & checkpointing
