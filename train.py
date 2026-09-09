@@ -442,12 +442,12 @@ def main():
     sources = load_sources()
     for s in sources:
         print(f"  source {s['name']:<14} weight={s.get('weight', MIX.get(s['name'],0)):.3f} "
-              f"docs={len(s['offsets'])-1} tokens={int(s['offsets'][-1])/1e6:.1f}M")
+              f"docs={len(s['offsets'])-1} tokens={int(s['offsets'][-1])/1e6:.1f}M", flush=True)
     corphash = corpus_hash(sources)
 
     model = make_model(CFG_N_LAYER, CFG_N_HEAD, CFG_N_EMBD, CFG_BLOCK)
     diff = sum(p.numel() for p in model.parameters())
-    print(f"params: {diff/1e6:.2f}M  block_size={CFG_BLOCK}  budget={args.budget/1e6:.0f}M")
+    print(f"params: {diff/1e6:.2f}M  block_size={CFG_BLOCK}  budget={args.budget/1e6:.0f}M", flush=True)
 
     scaler = torch.amp.GradScaler("cuda")
     opt = torch.optim.AdamW(decay_param_groups(model), lr=PEAK_LR,
@@ -463,7 +463,7 @@ def main():
         accum = args.accum or max(1, EFF_TOKENS // micro)
     eff = accum * micro
     print(f"micro-batch {args.micro_batch}x{CFG_BLOCK} = {micro} tok; "
-          f"accum x{accum} -> {eff/1000:.0f}k tokens/update")
+          f"accum x{accum} -> {eff/1000:.0f}k tokens/update", flush=True)
 
     step = 0
     tokens_seen = 0
@@ -497,7 +497,7 @@ def main():
                   f"{user_budget}; this resets the LR schedule (new experiment)",
                   flush=True)
         print(f"[resume] step={step} tokens_seen={tokens_seen/1e6:.1f}M "
-              f"best_val={best_val:.4f} budget={args.budget/1e6:.0f}M")
+              f"best_val={best_val:.4f} budget={args.budget/1e6:.0f}M", flush=True)
     else:
         torch.manual_seed(args.seed)
     config["budget"] = args.budget
@@ -505,7 +505,7 @@ def main():
     eval_sets = build_eval_set(sampler)
 
     print(f"[train] starting tokens_seen={tokens_seen/1e6:.1f}M "
-          f"lr={lr_at(tokens_seen,args.budget):.2e}")
+          f"lr={lr_at(tokens_seen,args.budget):.2e}", flush=True)
 
     last_t = time.time()
     last_tok = tokens_seen
@@ -562,7 +562,7 @@ def main():
 
     save_checkpoint(model, opt, scaler, sampler, step, tokens_seen,
                     best_val, config, "budget-exhausted")
-    print(f"[train] finished {tokens_seen/1e6:.1f}M tokens; best_val={best_val:.4f}")
+    print(f"[train] finished {tokens_seen/1e6:.1f}M tokens; best_val={best_val:.4f}", flush=True)
 
 
 if __name__ == "__main__":
