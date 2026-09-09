@@ -4,6 +4,7 @@ Layout (all under ./corpus/, gitignored):
 
   raw/<source>/      downloaded archives/dumps
   clean/<source>.jsonl   one JSON record per kept document (thread/book/paper)
+  clean_stripped/<source>.jsonl  LaTeX-stripped version for training
   tokens/<source>.bin    uint16 GPT-2 token stream, <EOT> between documents
   tokens/<source>.offsets.npy  start offsets of each document in the .bin
   manifest.jsonl     per-source metadata + aggregate token counts
@@ -12,7 +13,9 @@ Subcommands:
   download <source>...   fetch archives (idempotent)
   extract <source>...    unpack archives (idempotent)
   clean <source>...      normalize archives into clean/<source>.jsonl
+  latex-strip <source>   convert LaTeX math to Unicode/plain text in clean/
   tokenize --source NAME --clean corpus/clean/NAME.jsonl
+  retokenize <source>    tokenize stripped version from clean_stripped/
   audit                  report measured token supply per source
 
 Sources:
@@ -37,16 +40,21 @@ from pathlib import Path
 import numpy as np
 import requests
 import tiktoken
+from pylatexenc.latex2text import LatexNodes2Text
 
 ROOT = Path(__file__).parent.resolve()
 CORPUS = ROOT / "corpus"
 RAW = CORPUS / "raw"
 CLEAN = CORPUS / "clean"
+CLEAN_STRIPPED = CORPUS / "clean_stripped"
 TOKENS = CORPUS / "tokens"
 MANIFEST = CORPUS / "manifest.jsonl"
 
 EOT = 50256  # GPT-2 <|endoftext|>
 ENC = tiktoken.get_encoding("gpt2")
+
+# LaTeX stripping configuration
+LATEX_STRIP_SOURCES = ["arxiv", "se-math", "se-physics", "se-stats", "se-chemistry", "se-cstheory"]
 
 SE_SITES = ["physics", "math", "chemistry", "stats", "cstheory"]
 SE_URL = "https://archive.org/download/stackexchange/{site}.stackexchange.com.7z"
@@ -165,6 +173,154 @@ def clean_se(site):
             fh.write(json.dumps(rec) + "\n")
             kept += 1
     log(f"[se] {site}: kept {kept} threads, skipped {skipped}")
+
+
+# ---------------------------------------------------------------------------
+# LaTeX stripping
+# ---------------------------------------------------------------------------
+
+LATEX_CONVERTER = LatexNodes2Text()
+
+# Unicode replacements for common LaTeX math symbols
+LATEX_UNICODE = {
+    # Greek letters
+    r'\alpha': 'α', r'\beta': 'β', r'\gamma': 'γ', r'\delta': 'δ',
+    r'\epsilon': 'ε', r'\varepsilon': 'ε', r'\zeta': 'ζ', r'\eta': 'η',
+    r'\theta': 'θ', r'\vartheta': 'ϑ', r'\iota': 'ι', r'\kappa': 'κ',
+    r'\lambda': 'λ', r'\mu': 'μ', r'\nu': 'ν', r'\xi': 'ξ',
+    r'\pi': 'π', r'\varpi': 'ϖ', r'\rho': 'ρ', r'\varrho': 'ϱ',
+    r'\sigma': 'σ', r'\varsigma': 'ς', r'\tau': 'τ', r'\upsilon': 'υ',
+    r'\phi': 'φ', r'\varphi': 'φ', r'\chi': 'χ', r'\psi': 'ψ', r'\omega': 'ω',
+    r'\Gamma': 'Γ', r'\Delta': 'Δ', r'\Theta': 'Θ', r'\Lambda': 'Λ',
+    r'\Xi': 'Ξ', r'\Pi': 'Π', r'\Sigma': 'Σ', r'\Upsilon': 'Υ',
+    r'\Phi': 'Φ', r'\Psi': 'Ψ', r'\Omega': 'Ω',
+    # Operators
+    r'\sum': '∑', r'\prod': '∏', r'\int': '∫', r'\oint': '∮',
+    r'\partial': '∂', r'\nabla': '∇', r'\lim': 'lim', r'\infty': '∞',
+    r'\pm': '±', r'\mp': '∓', r'\times': '×', r'\div': '÷',
+    r'\cdot': '·', r'\ast': '*', r'\circ': '∘', r'\bullet': '•',
+    # Relations
+    r'\le': '≤', r'\ge': '≥', r'\ll': '≪', r'\gg': '≫',
+    r'\neq': '≠', r'\approx': '≈', r'\sim': '∼', r'\simeq': '≃',
+    r'\equiv': '≡', r'\propto': '∝', r'\subset': '⊂', r'\supset': '⊃',
+    r'\subseteq': '⊆', r'\supseteq': '⊇', r'\in': '∈', r'\notin': '∉',
+    r'\ni': '∋', r'\emptyset': '∅', r'\cup': '∪', r'\cap': '∩',
+    # Arrows
+    r'\to': '→', r'\rightarrow': '→', r'\leftarrow': '←',
+    r'\Rightarrow': '⇒', r'\Leftarrow': '⇐', r'\Leftrightarrow': '⇔',
+    r'\mapsto': '↦', r'\uparrow': '↑', r'\downarrow': '↓',
+    # Sets / logic
+    r'\forall': '∀', r'\exists': '∃', r'\nexists': '∄',
+    r'\neg': '¬', r'\land': '∧', r'\lor': '∨', r'\implies': '⇒',
+    # Calculus
+    r'\frac': '/', r'\sqrt': '√', r'\partial': '∂', r'\degree': '°',
+    # Special functions (keep as text)
+    r'\sin': 'sin', r'\cos': 'cos', r'\tan': 'tan', r'\log': 'log',
+    r'\ln': 'ln', r'\exp': 'exp', r'\lim': 'lim', r'\max': 'max',
+    r'\min': 'min', r'\sup': 'sup', r'\inf': 'inf',
+    # Fonts (common math alphabets)
+    r'\mathbb': '', r'\mathcal': '', r'\mathfrak': '', r'\mathbf': '',
+    r'\mathit': '', r'\mathsf': '', r'\mathtt': '', r'\mathrm': '',
+    r'\mathcal': '', r'\mathscr': '',
+    # Accents
+    r'\hat': '^', r'\tilde': '~', r'\bar': '¯', r'\vec': '→',
+    r'\dot': '·', r'\ddot': '¨', r'\prime': "'",
+    # Spacing (remove)
+    r'\,': ' ', r'\;': ' ', r'\:': ' ', r'\!': '',
+    r'\quad': '  ', r'\qquad': '    ',
+    # Brackets
+    r'\left': '', r'\right': '', r'\bigl': '', r'\bigr': '',
+    r'\Bigl': '', r'\Bigr': '', r'\biggl': '', r'\biggr': '',
+    r'\Biggl': '', r'\Biggr': '',
+    # Common text-mode commands in math
+    r'\text': '', r'\textbf': '', r'\textit': '', r'\texttt': '',
+}
+
+# Patterns for structural LaTeX (handled specially)
+FRAC_RE = re.compile(r'\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}')
+SQRT_RE = re.compile(r'\\sqrt\s*\{([^{}]+)\}')
+SUB_RE = re.compile(r'_\{([^{}]+)\}')
+SUP_RE = re.compile(r'\^\{([^{}]+)\}')
+MATH_INLINE_RE = re.compile(r'\$(.+?)\$')
+MATH_DISPLAY_RE = re.compile(r'\$\$(.+?)\$\$', re.DOTALL)
+COMMAND_RE = re.compile(r'\\[a-zA-Z]+')
+
+def strip_latex(text):
+    """Convert LaTeX math to readable Unicode/plain text."""
+    # First, handle display math $$...$$
+    def replace_display(m):
+        inner = m.group(1)
+        inner = process_math(inner)
+        return '\n' + inner + '\n'
+    text = MATH_DISPLAY_RE.sub(replace_display, text)
+
+    # Handle inline math $...$
+    def replace_inline(m):
+        inner = m.group(1)
+        inner = process_math(inner)
+        return ' ' + inner + ' '
+    text = MATH_INLINE_RE.sub(replace_inline, text)
+
+    # Convert remaining LaTeX commands with pylatexenc
+    try:
+        text = LATEX_CONVERTER.latex_to_text(text)
+    except Exception:
+        pass
+
+    # Clean up whitespace
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+def process_math(math_text):
+    """Process a math expression (inside $...$ or $$...$$)."""
+    # Handle \frac{a}{b} -> a/b
+    math_text = FRAC_RE.sub(r'\1/\2', math_text)
+    # Handle \sqrt{x} -> √x
+    math_text = SQRT_RE.sub(r'√\1', math_text)
+    # Handle subscripts _x -> x (subscript)
+    math_text = SUB_RE.sub(r'_\1', math_text)
+    # Handle superscripts ^x -> x (superscript)
+    math_text = SUP_RE.sub(r'^\1', math_text)
+    # Replace known commands
+    for cmd, repl in LATEX_UNICODE.items():
+        math_text = math_text.replace(cmd, repl)
+    # Remove remaining \command{...} or \command
+    math_text = COMMAND_RE.sub('', math_text)
+    # Clean braces
+    math_text = math_text.replace('{', '').replace('}', '')
+    return math_text
+
+def latex_strip(source):
+    """Read clean/<source>.jsonl, strip LaTeX, write to clean_stripped/."""
+    if source not in LATEX_STRIP_SOURCES:
+        log(f"[latex-strip] {source}: not in strip list, skipping")
+        return
+
+    in_file = CLEAN / f"{source}.jsonl"
+    out_file = CLEAN_STRIPPED / f"{source}.jsonl"
+    if not in_file.exists():
+        sys.exit(f"[latex-strip] {source}: input {in_file} not found")
+
+    CLEAN_STRIPPED.mkdir(parents=True, exist_ok=True)
+    if out_file.exists():
+        log(f"[latex-strip] {source}: already stripped")
+        return
+
+    log(f"[latex-strip] {source}: stripping LaTeX from {in_file}")
+    count = 0
+    with in_file.open(encoding="utf-8") as fin, out_file.open("w", encoding="utf-8") as fout:
+        for line in fin:
+            rec = json.loads(line)
+            original = rec["text"]
+            stripped = strip_latex(original)
+            rec["text"] = stripped
+            rec["latex_stripped"] = True
+            fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            count += 1
+            if count % 10000 == 0:
+                log(f"[latex-strip] {source}: processed {count} docs")
+    log(f"[latex-strip] {source}: done {count} docs -> {out_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +701,12 @@ def main():
     p.add_argument("--source", required=True)
     p.add_argument("--clean", required=True)
 
+    p = sub.add_parser("latex-strip", help="strip LaTeX math to Unicode/plain text")
+    p.add_argument("source", nargs="+", choices=LATEX_STRIP_SOURCES + ["all"])
+
+    p = sub.add_parser("retokenize", help="tokenize stripped corpus from clean_stripped/")
+    p.add_argument("source", nargs="+", choices=LATEX_STRIP_SOURCES + ["all"])
+
     p = sub.add_parser("arxiv-rank", help="rank arXiv by citations, keep STEM")
     p.add_argument("--top", type=int, default=4000)
     p.add_argument("--mailto", default="dlbattle@example.com",
@@ -574,6 +736,14 @@ def main():
                 clean_se(site)
     elif args.cmd == "tokenize":
         tokenize(args.source, args.clean)
+    elif args.cmd == "latex-strip":
+        sources = LATEX_STRIP_SOURCES if "all" in args.source else args.source
+        for src in sources:
+            latex_strip(src)
+    elif args.cmd == "retokenize":
+        sources = LATEX_STRIP_SOURCES if "all" in args.source else args.source
+        for src in sources:
+            tokenize(src, CLEAN_STRIPPED / f"{src}.jsonl")
     elif args.cmd == "arxiv-rank":
         arxiv_rank(args.top, args.mailto)
     elif args.cmd == "arxiv-fetch":

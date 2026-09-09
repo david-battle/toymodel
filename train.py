@@ -1,4 +1,4 @@
-"""Toy-model training loop (nanoGPT-style) for the ~51M-param GPT.
+"""Toy-model training loop (nanoGPT-style) for the ~51M/124M-param GPT.
 
 Loads the finished tokenized corpus (see prepare_data.py), trains with the
 60/28/12 arXiv/SE/Wikipedia mixture, fp16 AMP + GradScaler, AdamW with
@@ -10,9 +10,10 @@ prefetch queues) whose RNG state is saved in each checkpoint, so resume
 is bit-exact in the data sequence.
 
 Usage:
-  .venv/bin/python train.py                      # pilot, 20M tokens
+  .venv/bin/python train.py                      # pilot, 20M tokens (51M model)
   .venv/bin/python train.py --budget 1000000000  # full run target
   .venv/bin/python train.py --resume ckpt/last.pt
+  .venv/bin/python train.py --n-layer 12 --n-head 12 --n-embd 768 --block 512 --budget 2500000000  # 124M model, 2.5B tokens
 
 Ctrl-C / SIGTERM sets a flag; the loop checkpoints and exits at the next
 complete update. A second Ctrl-C forces immediate exit without saving.
@@ -39,6 +40,7 @@ DEV = "cuda"
 VOCAB = 50304
 VOCAB_REAL = 50257
 
+# Default model config (51M model) — can be overridden via CLI
 N_LAYER = 8
 N_HEAD = 8
 N_EMBD = 512
@@ -55,21 +57,27 @@ WEIGHT_DECAY = 0.1
 GRAD_CLIP = 1.0
 EFF_TOKENS = 128 * 1024  # effective tokens per update (via accumulation)
 
+# Runtime config (set in main)
+CFG_N_LAYER = N_LAYER
+CFG_N_HEAD = N_HEAD
+CFG_N_EMBD = N_EMBD
+CFG_BLOCK = BLOCK
+
 
 # ---------------------------------------------------------------------------
 # model (same recipe as gpu_smoke.py / benchmark.py)
 # ---------------------------------------------------------------------------
 
 class Block(nn.Module):
-    def __init__(self):
+    def __init__(self, n_embd, n_head):
         super().__init__()
-        self.ln1 = nn.LayerNorm(N_EMBD, bias=False)
-        self.attn = nn.MultiheadAttention(N_EMBD, N_HEAD, batch_first=True, bias=False)
-        self.ln2 = nn.LayerNorm(N_EMBD, bias=False)
+        self.ln1 = nn.LayerNorm(n_embd, bias=False)
+        self.attn = nn.MultiheadAttention(n_embd, n_head, batch_first=True, bias=False)
+        self.ln2 = nn.LayerNorm(n_embd, bias=False)
         self.mlp = nn.Sequential(
-            nn.Linear(N_EMBD, 4 * N_EMBD, bias=False),
+            nn.Linear(n_embd, 4 * n_embd, bias=False),
             nn.GELU(),
-            nn.Linear(4 * N_EMBD, N_EMBD, bias=False),
+            nn.Linear(4 * n_embd, n_embd, bias=False),
         )
 
     def forward(self, x, mask):
@@ -81,14 +89,16 @@ class Block(nn.Module):
 
 
 class MiniGPT(nn.Module):
-    def __init__(self):
+    def __init__(self, n_layer, n_head, n_embd, block_size, vocab_size=VOCAB):
         super().__init__()
-        self.tok = nn.Embedding(VOCAB, N_EMBD)
-        self.pos = nn.Embedding(BLOCK, N_EMBD)
-        self.blocks = nn.ModuleList([Block() for _ in range(N_LAYER)])
-        self.ln_f = nn.LayerNorm(N_EMBD, bias=False)
-        self.head = nn.Linear(N_EMBD, VOCAB, bias=False)
+        self.tok = nn.Embedding(vocab_size, n_embd)
+        self.pos = nn.Embedding(block_size, n_embd)
+        self.blocks = nn.ModuleList([Block(n_embd, n_head) for _ in range(n_layer)])
+        self.ln_f = nn.LayerNorm(n_embd, bias=False)
+        self.head = nn.Linear(n_embd, vocab_size, bias=False)
         self.head.weight = self.tok.weight  # tied embeddings
+        self.block_size = block_size
+        self.n_layer = n_layer
 
     def forward(self, idx):
         B, T = idx.shape
@@ -100,18 +110,22 @@ class MiniGPT(nn.Module):
         return self.head(self.ln_f(x))
 
 
-def make_model():
-    model = MiniGPT().to(DEV)
+def make_model(n_layer, n_head, n_embd, block_size):
+    model = MiniGPT(n_layer, n_head, n_embd, block_size).to(DEV)
     # nanoGPT-style init: std 0.02 everywhere, residual output projections
     # scaled by 1/sqrt(2*n_layer) so the residual stream stays ~O(1).
     for p in model.parameters():
         if p.dim() >= 2:
             nn.init.normal_(p, 0.0, 0.02)
-    proj_std = 0.02 / (2 * N_LAYER) ** 0.5
+    proj_std = 0.02 / (2 * n_layer) ** 0.5
     for blk in model.blocks:
         nn.init.normal_(blk.attn.out_proj.weight, 0.0, proj_std)
         nn.init.normal_(blk.mlp[-1].weight, 0.0, proj_std)
     return model
+
+
+def get_block():
+    return CFG_BLOCK
 
 
 def decay_param_groups(model):
@@ -187,9 +201,10 @@ def corpus_hash(sources):
 def sample_batch(sources, weights, gen, b, device):
     """Draw a B x BLOCK token batch, one document window per row."""
     B = b
+    block = get_block()
     cats = torch.multinomial(torch.tensor(weights, device="cpu"), B, replacement=True,
                              generator=gen)
-    idx = torch.empty((B, BLOCK), dtype=torch.long)
+    idx = torch.empty((B, block), dtype=torch.long)
     for i, ci in enumerate(cats.tolist()):
         src = sources[ci]
         off = src["offsets"]
@@ -198,12 +213,12 @@ def sample_batch(sources, weights, gen, b, device):
         start, end = int(off[di]), int(off[di + 1])
         doc = src["mmap"][start:end]
         dlen = doc.shape[0]
-        if dlen >= BLOCK:
-            s = int(torch.randint(0, dlen - BLOCK + 1, (1,), generator=gen).item())
-            row = doc[s:s + BLOCK]
+        if dlen >= block:
+            s = int(torch.randint(0, dlen - block + 1, (1,), generator=gen).item())
+            row = doc[s:s + block]
         else:
-            reps = (BLOCK + dlen - 1) // dlen
-            row = np.resize(doc, reps * dlen)[:BLOCK]
+            reps = (block + dlen - 1) // dlen
+            row = np.resize(doc, reps * dlen)[:block]
         idx[i] = torch.from_numpy(row.astype(np.int64))
     return idx.to(device)
 
@@ -291,6 +306,9 @@ def load_checkpoint(path, model, opt, scaler, sampler, config):
         sys.exit(f"[resume] checkpoint format {state['fmt']} != {config['fmt']}")
     if state["config"]["corpus_hash"] != config["corpus_hash"]:
         sys.exit("[resume] corpus hash mismatch; corpus changed")
+    for k in ("n_layer", "n_head", "n_embd", "block_size"):
+        if state["config"].get(k) != config.get(k):
+            sys.exit(f"[resume] model config mismatch: {k}={state['config'].get(k)} != {config.get(k)}")
     model.load_state_dict(state["model"])
     model = model.to(DEV)
     opt.load_state_dict(state["optimizer"])
@@ -332,6 +350,7 @@ def install_signals():
 def build_eval_set(sampler, n_docs=64):
     """Hold out a fixed set of document windows per source for eval, drawn once
     at startup so evaluation does not consume training RNG state."""
+    block = get_block()
     ev = []
     for s in sampler.sources:
         off = s["offsets"]
@@ -340,17 +359,17 @@ def build_eval_set(sampler, n_docs=64):
         g.manual_seed(int(hashlib.sha256(s["name"].encode()).hexdigest()[:8], 16))
         keep = min(n_docs, ndocs)
         di = torch.randint(0, ndocs, (keep,), generator=g)
-        rows = torch.empty((keep, BLOCK), dtype=torch.long)
+        rows = torch.empty((keep, block), dtype=torch.long)
         for j, d in enumerate(di.tolist()):
             start, end = int(off[d]), int(off[d + 1])
             doc = s["mmap"][start:end]
             dlen = doc.shape[0]
-            if dlen >= BLOCK:
-                st2 = int(torch.randint(0, dlen - BLOCK + 1, (1,), generator=g).item())
-                row = doc[st2:st2 + BLOCK]
+            if dlen >= block:
+                st2 = int(torch.randint(0, dlen - block + 1, (1,), generator=g).item())
+                row = doc[st2:st2 + block]
             else:
-                reps = (BLOCK + dlen - 1) // dlen
-                row = np.resize(doc, reps * dlen)[:BLOCK]
+                reps = (block + dlen - 1) // dlen
+                row = np.resize(doc, reps * dlen)[:block]
             rows[j] = torch.from_numpy(row.astype(np.int64))
         ev.append((s["name"], rows))
     return ev
@@ -381,6 +400,7 @@ def evaluate(model, lossf, eval_sets, tokens_seen):
 # ---------------------------------------------------------------------------
 
 def main():
+    global CFG_N_LAYER, CFG_N_HEAD, CFG_N_EMBD, CFG_BLOCK
     ap = argparse.ArgumentParser()
     ap.add_argument("--budget", type=int, default=None,
                     help="total tokens to consume (default 20M; on resume, "
@@ -399,7 +419,18 @@ def main():
     ap.add_argument("--log-steps", type=int, default=10)
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--no-accumulate", action="store_true")
+    # Model config overrides
+    ap.add_argument("--n-layer", type=int, default=N_LAYER)
+    ap.add_argument("--n-head", type=int, default=N_HEAD)
+    ap.add_argument("--n-embd", type=int, default=N_EMBD)
+    ap.add_argument("--block", type=int, default=BLOCK)
     args = ap.parse_args()
+
+    # Apply model config
+    CFG_N_LAYER = args.n_layer
+    CFG_N_HEAD = args.n_head
+    CFG_N_EMBD = args.n_embd
+    CFG_BLOCK = args.block
 
     user_budget = args.budget
     if args.budget is None:
@@ -414,9 +445,9 @@ def main():
               f"docs={len(s['offsets'])-1} tokens={int(s['offsets'][-1])/1e6:.1f}M")
     corphash = corpus_hash(sources)
 
-    model = make_model()
+    model = make_model(CFG_N_LAYER, CFG_N_HEAD, CFG_N_EMBD, CFG_BLOCK)
     diff = sum(p.numel() for p in model.parameters())
-    print(f"params: {diff/1e6:.2f}M  block_size={BLOCK}  budget={args.budget/1e6:.0f}M")
+    print(f"params: {diff/1e6:.2f}M  block_size={CFG_BLOCK}  budget={args.budget/1e6:.0f}M")
 
     scaler = torch.amp.GradScaler("cuda")
     opt = torch.optim.AdamW(decay_param_groups(model), lr=PEAK_LR,
@@ -425,13 +456,13 @@ def main():
 
     sampler = Sampler(sources)
 
-    micro = args.micro_batch * BLOCK
+    micro = args.micro_batch * CFG_BLOCK
     if args.no_accumulate:
         accum = 1
     else:
         accum = args.accum or max(1, EFF_TOKENS // micro)
     eff = accum * micro
-    print(f"micro-batch {args.micro_batch}x{BLOCK} = {micro} tok; "
+    print(f"micro-batch {args.micro_batch}x{CFG_BLOCK} = {micro} tok; "
           f"accum x{accum} -> {eff/1000:.0f}k tokens/update")
 
     step = 0
@@ -445,6 +476,10 @@ def main():
         "micro_batch": args.micro_batch,
         "accum": accum,
         "seed": args.seed,
+        "n_layer": CFG_N_LAYER,
+        "n_head": CFG_N_HEAD,
+        "n_embd": CFG_N_EMBD,
+        "block_size": CFG_BLOCK,
     }
 
     if args.resume:
