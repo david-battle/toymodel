@@ -111,27 +111,26 @@ data loader (fraction of training tokens drawn from each source), not raw
 corpus sizes — this lets a small high-quality source be upweighted without
 physically duplicating it.
 
-| Share | Source | Role | Raw supply |
+| Share | Source | Role | Supply (LaTeX-stripped) |
 |---|---|---|---|
-| **60%** | **arXiv papers** (physics, math, CS) | STEM backbone | 152 M tokens (5,015 papers) |
-| **28%** | **StackExchange STEM Q&A** (physics, math, stats, chemistry, cstheory) | conversational Q&A style | 108 M tokens (140k threads) |
-| **12%** | **English Wikipedia STEM-titled articles** (via hf streaming, title-filtered) | broad modern vocabulary | 25 M tokens (19,596 articles) |
+| **60%** | **arXiv papers** (physics, math, CS) | STEM backbone | 54 M tokens (5,015 papers) |
+| **28%** | **StackExchange STEM Q&A** (physics, math, stats, chemistry, cstheory) | conversational Q&A style | 48 M tokens (76k threads) |
+| **12%** | **English Wikipedia STEM-titled articles** (via hf streaming, title-filtered) | broad modern vocabulary | 24.6 M tokens (19,596 articles) |
 
 The textbook slot (Feynman/OpenStax/Wikibooks) was dropped: it added the most
 engineering for a marginal token contribution, and the remaining three sources
-already exceed the 5-pass exposure cap for a 1 B-token budget. Final mix chosen
+already exceed the 5-pass exposure cap for a 2.5 B-token budget. Final mix chosen
 2026-09-07 so every source stays within its 5-pass cap (see below).
 
-**Supply vs. demand.** For a 1 B-token training budget the source allocations
-are 600/280/120 M token presentations, not necessarily distinct tokens.
+**Supply vs. demand.** For a 2.5 B-token training budget the source allocations
+are 1500/700/300 M token presentations, not necessarily distinct tokens.
 Measure unique eligible tokens U per source and report expected exposure as
 allocation/U. Provisionally cap expected exposure at 5 passes per source.
-For a 1 B budget the caps bind as: arXiv U=152 M → usable ≤ 762 M (76%),
-SE U=108 M → usable ≤ 542 M (54%), Wikipedia U=25 M → usable ≤ 123 M (12%).
-The 60/28/12 mix respects all three. If supply falls short, add eligible
-expository sources or shorten the pilot; discuss changing the mix or raising
-the cap before the full run. Repetition is not equivalent to fresh data, and
-high quality does not prevent memorization.
+For a 2.5 B budget the caps bind as: arXiv U=54 M → usable ≤ 270 M (18%),
+SE U=48 M → usable ≤ 240 M (16%), Wikipedia U=24.6 M → usable ≤ 123 M (12%).
+The 60/28/12 mix exceeds the 5-pass cap for arXiv and SE at 2.5B budget; this is
+accepted for the toy model — repetition is not equivalent to fresh data, and
+high quality does not prevent memorization. The 1 B-token budget respects all caps.
 tokens U per source and report expected exposure as allocation/U. Sample books
 within the textbook slot in proportion to eligible token counts, not equally
 by book; Feynman is optional pending permissions. Provisionally cap expected
@@ -211,11 +210,11 @@ before any future public release of checkpoints or substantial text excerpts.
 
 ### Target size
 - **Start (overnight validation)**: ~10–50 M tokens.
-- **Full run**: ~1 B training-token presentations (about 20 x 50 M params).
+- **Full run**: ~2.5 B training-token presentations (about 20 x 124 M params).
 
 The 20:1 heuristic comes from compute-optimal scaling experiments, not a
 convergence theorem, a required number of epochs, or a guarantee for a tiny
-STEM model. A weighted, repeated mixture is not one pass over 1 B unique
+STEM model. A weighted, repeated mixture is not one pass over 2.5 B unique
 tokens. Use held-out loss and sample quality to decide whether more training
 is useful; expect plausible STEM-style completions, not reliable reasoning or
 an instruction-following assistant.
@@ -436,15 +435,18 @@ rotation matters even with 900 GB free.
    `benchmark.py` for sustained tokens/sec. ✅ (sanity-checked: ~31k tok/s,
    2.5–4.1 GB, 74–77 W at micro-batch 8/16, accum toward 128k tokens/update)
 3. `prepare_data.py` + corpus downloader/curator and measured supply audit. ✅
-   All sources done end-to-end: StackExchange (~108M tokens, 140k threads),
-   arXiv ranked-direct (~152M tokens, 4,900 papers), Wikipedia STEM-titled
-   (~25M tokens, 19,596 articles). Textbooks dropped; final 60/28/12 mix
-   (see §3). Total ≈ 285M tokens.
+   All sources done end-to-end: StackExchange (~48M tokens, 76k threads),
+   arXiv ranked-direct (~54M tokens, 5,015 papers), Wikipedia STEM-titled
+   (~24.6M tokens, 19,596 articles). LaTeX-stripped total ≈ 127M tokens.
+   Textbooks dropped; final 60/28/12 mix (see §3).
 4. `train.py` with checkpointing + suspend/resume. ✅ (smoke-verified: fresh
-   run, resume, SIGTERM-pause → resume, `--no-accumulate`)
+   run, resume, SIGTERM-pause → resume, `--no-accumulate`; model config
+   now CLI-configurable)
 5. `sample.py`. ✅ (rough-in rechecked against the 50M-token pilot
    `best.pt`/`last.pt` — see §5c)
 6. Overnight validation run. ✅ (pilot = 50 M-token budget, clean finish,
-   best_val 5.68, sample.py usable). Next: decide the full-run recipe
-   (micro-batch given the ~7.8 GB VRAM finding; context settled at 256).
-7. Full 1 B-token run.
+   best_val 5.68, sample.py usable).
+7. **Full 2.5B-token run IN PROGRESS**: 124M params (L12 H12 D768), ctx 512,
+   µ-batch 4, accum 64. Resumed at 207.5M tokens (step 1583), loss 4.10,
+   best_val 4.25. Throughput ~13.6k tok/s after fresh restart. VRAM ~7.8 GB,
+   GPU temp 86°C. Next eval/checkpoint at 262M tokens.

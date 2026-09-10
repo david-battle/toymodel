@@ -58,40 +58,28 @@ rules. Keep changes small.
 - Repo scaffolded, docs written (`TOY_MODEL_PLAN.md`, this file).
 - `.venv/` created; `torch 2.14.0+cu126` verified working on the GPU
   (`gpu_smoke.py` runs real fp16 forward/backward/AdamW at ~28k tok/s).
-- Corpus pipeline (`prepare_data.py`): **SE (~108M tokens, 140k threads)** and
-  **arXiv ranked-direct (~152M GPT-2 tokens, 4,900 top-cited papers)** and
-  **Wikipedia STEM-titled (~25M tokens, 19,596 articles, hf parquet streaming
-  filtered on title)** all ingested end-to-end. Total supply ≈ 285 M tokens.
-  Raw archives are deleted after cleaning (stream-and-discard; corpus/ keeps
-  only clean + tokens; `audit` derives counts from corpus/tokens directly).
-  Textbooks (OpenStax/Wikibooks) were **dropped** — not worth the engineering
-  for the token gain; final **60/28/12 mix** (arXiv/SE/Wikipedia) stays within
-  every 5-pass cap for a 1 B-token budget (see plan §3).
-  - SE gotcha: dump filename uses site slugs — `math.stackexchange.com.7z`
-    (not `mathematics`), `stats.stackexchange.com.7z` (not `statistics`).
-  - lxml `iterparse` gotcha: must `dict(elem.attrib)` before `elem.clear()`;
-    the live attrib dict gets emptied otherwise (kept 0 threads).
-  - The HF RedPajama-1T repo is pointer-only (data at `data.together.xyz`,
-    86 GB, raw LaTeX, no category) and `arxiv-papers-by-subject` is
-    abstracts-only; ranked-direct is the cheap full-text route.
-  - OpenAlex arXiv source id is `S4306400194`; `page` is capped at 50 so large
-    ranking must use cursor pagination. The arXiv API returns versioned ids
-    (`1412.6980v9`) — strip `v<N>` to match OpenAlex/extracted ids.
-  - Citation-ranked arXiv skews to cs/cond-mat/quant-ph; math is ~2% of the
-    list. The fetch alternates categories round-robin to keep math/stat.
-  - `wiki-fetch` streams `wikimedia/wikipedia` `20231101.en`, keeps only
-    STEM-titled articles (title regex, Wikipedia/List/disambiguation excluded),
-    appends incrementally and stops at quota; unauthenticated HF can rate-limit
-    (resume-safe — already-kept ids are skipped). Ran a couple of times to
-    finish.
-- **Not yet implemented**: none blocking. **50M-token pilot complete**
-  (50.1M tokens, best_val 5.68, loss 10.4→5.5, 0 AMP skips, finished cleanly on
-  `budget-exhausted`). VRAM hit ~7.8 GB at micro-batch 16 (vs 4.1 GB synthetic
-  benchmark) — full-run recipe should re-benchmark or drop to micro-batch 8.
-  `sample.py` rechecked on `best.pt`/`last.pt`: works; greedy degenerates,
-  output is STEM-structured gibberish that reproduces corpus LaTeX/`## Answer`
-  conventions (expected — see plan §5c). Next: decide the full-run recipe
-  (micro-batch, maybe shorter/fixed context is 256).
+- Corpus pipeline (`prepare_data.py`): **SE (~48M tokens, 76k threads)** and
+  **arXiv ranked-direct (~54M GPT-2 tokens, 5,015 top-cited papers)** and
+  **Wikipedia STEM-titled (~24.6M tokens, 19,596 articles, hf parquet streaming
+  filtered on title)** all ingested end-to-end. Total supply ≈ 127 M tokens
+  (LaTeX-stripped). Raw archives are deleted after cleaning (stream-and-discard;
+  corpus/ keeps only clean + tokens; `audit` derives counts from corpus/tokens
+  directly). Textbooks (OpenStax/Wikibooks) were **dropped** — not worth the
+  engineering for the token gain; final **60/28/12 mix** (arXiv/SE/Wikipedia)
+  stays within every 5-pass cap for a 2.5 B-token budget (see plan §3).
+  - LaTeX stripping (pylatexenc + custom heuristics): converts `$...$`,
+    `$$...$$`, `\frac`, `\sqrt`, Greek letters, arrows, relations → Unicode.
+    Strips `## Answer` markers from SE.
+- **50M-token pilot complete** (50.1M tokens, best_val 5.68, loss 10.4→5.5,
+  0 AMP skips, finished cleanly on `budget-exhausted`).
+- **124M full run IN PROGRESS**: 12 layers × 768 dim, context 512, ~124M params.
+  Resumed at 207.5M tokens (step 1583), loss 4.10, best_val 4.25.
+  Throughput recovered to ~13.6k tok/s after fresh process restart (was 2–11k
+  tok/s due to CUDA context fragmentation). VRAM ~7.8 GB, GPU temp 86°C.
+  Target: 2.5B tokens (19.7 epochs). Next eval at 262M, next checkpoint at 262M.
+- `train.py` updated: model config (n_layer, n_head, n_embd, block) now
+  configurable via CLI; `--resume` restores full state bit-exactly.
+- `prepare_data.py` updated: `latex-strip` and `retokenize` subcommands added.
 - See `TOY_MODEL_PLAN.md` §8 (milestones) for the next steps.
 
 ## Files

@@ -31,45 +31,44 @@
 | Weight decay | 0.1 (excl. bias/LN/embed) |
 | Grad clip | 1.0 |
 | Optimizer | AdamW (β=0.9, 0.95) |
-| Eval interval | 50M tokens |
-| Checkpoint interval | 25M tokens + signals |
+| Eval interval | ~65M tokens (every 500 steps) |
+| Checkpoint interval | ~65M tokens (every 500 steps) + signals |
 
-**VRAM**: ~4.3 GB peak allocated (benchmarked), safe with 1 GB display overhead.
+**VRAM**: ~7.8 GB peak allocated (measured), safe with 1 GB display overhead.
 
-**Throughput**: ~9,700 tok/s sustained (benchmarked).
+**Throughput**: ~11–13.6k tok/s sustained (measured, after fresh restart).
 
-**Time estimate**: 2.5B / 9,700 ≈ **71.5 hours (3 days)** pretrain + 4h instruct-tune = **~3.5 days GPU time**. 2-week wall budget allows for pauses, data prep, eval.
+**Time estimate**: 2.5B / 11k ≈ **63 hours (2.6 days)** pretrain + 4h instruct-tune = **~3 days GPU time**. 2-week wall budget allows for pauses, data prep, eval.
 
 ---
 
 ## Data Pipeline
 
-### Phase 1: LaTeX Stripping & Re-tokenization (2–4h)
-- Parse `corpus/clean/*.jsonl` with `pylatexenc` + custom heuristics
-- Convert LaTeX math → Unicode/natural language:
-  - Inline `$...$` → plain text with Unicode symbols (∑, ∫, ∈, etc.)
-  - Display `$$...$$` → same, on own line
-  - `\frac{a}{b}` → `a/b`, `\sqrt{x}` → `√x`, `\mathbb{R}` → `ℝ`
-  - Greek letters, arrows, relations → Unicode
-  - Preserve plain text structure
-- Strip `## Answer` markers from SE data
-- Re-tokenize with tiktoken GPT-2 → `corpus/tokens_v2/*.bin`
-- Audit token counts, update manifest
+### Phase 1: LaTeX Stripping & Re-tokenization ✅ DONE (2026-09-09)
+- Parsed `corpus/clean/*.jsonl` with `pylatexenc` + custom heuristics
+- Converted LaTeX math → Unicode/natural language
+- Stripped `## Answer` markers from SE data
+- Re-tokenized with tiktoken GPT-2 → `corpus/tokens/*.bin`
+- **Result**: 127M tokens (arXiv 54M, SE 48M, Wikipedia 24.6M)
 
-### Phase 2: Pretraining (72h GPU)
-- 2.5B token budget (9.3 epochs over 269M unique tokens)
+### Phase 2: Pretraining 🔄 IN PROGRESS (started 2026-09-09)
+- 2.5B token budget (19.7 epochs over 127M unique tokens)
 - Mixture: arXiv 60% / SE 28% / Wikipedia 12%
-- Held-out: 0.5% per source (fixed split, same as pilot)
+- Held-out: 0.5% per source (fixed split)
 - Resume from `ckpt/last.pt` on interrupt
+- **Current**: 207.5M tokens (8.3%), step 1583, loss 4.10, best_val 4.25
+- **Throughput**: recovered to 13.6k tok/s after fresh restart
+- **Next eval**: ~262M tokens (step 2000)
+- **Next checkpoint**: ~262M tokens (step 2000)
 
-### Phase 3: Instruction Tuning (4h GPU)
+### Phase 3: Instruction Tuning (planned)
 - Format SE Q&A as chat: `Q: <question>\nA: <accepted_answer><|endoftext|>`
 - Filter: score ≥ 5, accepted answer exists
 - ~100k examples × 3 epochs = ~300M tokens
 - LR: 1e-4 constant (no decay), µ-batch 8, accum 32
 - Start from best pretrain checkpoint
 
-### Phase 4: Evaluation (1h)
+### Phase 4: Evaluation (planned)
 - Perplexity on held-out test sets (per source + aggregate)
 - Generation quality: fixed prompts, temperature sweep
 - Coherence metrics: repetition rate, EOT emission, LaTeX artifacts
@@ -79,10 +78,10 @@
 
 ## Checkpointing & Resume
 
-- `train.py` already supports: periodic (25M tokens), SIGINT/SIGTERM, atomic save/fsync, rotation (`best.pt`, `last.pt`, `step-<N>.pt`)
+- `train.py` supports: periodic (~65M tokens / 500 steps), SIGINT/SIGTERM, atomic save/fsync, rotation (`best.pt`, `last.pt`, `step-<N>.pt`)
 - RNG state saved for bit-exact resume
-- Add `--budget 2500000000` flag
-- Add `--context 512` flag (or config)
+- Model config (n_layer, n_head, n_embd, block) configurable via CLI
+- `--budget 2500000000` flag works; `--resume` restores full state bit-exactly
 
 ---
 
@@ -90,37 +89,38 @@
 
 | Milestone | Git Tag |
 |-----------|---------|
-| Plan finalized | `plan/full-run` |
-| LaTeX stripper ready | `data/latex-stripper` |
-| Re-tokenized corpus | `data/retokenized` |
-| Pretrain started | `train/pretrain-start` |
-| Pretrain 50% (1.25B) | `train/pretrain-mid` |
-| Pretrain complete | `train/pretrain-done` |
-| Instruct-tune started | `train/instruct-start` |
-| Instruct-tune complete | `train/instruct-done` |
-| Final eval done | `eval/final` |
+| Plan finalized | `plan/full-run` ✅ |
+| LaTeX stripper ready | `data/latex-stripper` ✅ |
+| Re-tokenized corpus | `data/retokenized` ✅ |
+| Pretrain started | `train/pretrain-start` ✅ |
+| Pretrain 10% (250M) | `train/pretrain-10pct` (pending) |
+| Pretrain 50% (1.25B) | `train/pretrain-mid` (pending) |
+| Pretrain complete | `train/pretrain-done` (pending) |
+| Instruct-tune started | `train/instruct-start` (pending) |
+| Instruct-tune complete | `train/instruct-done` (pending) |
+| Final eval done | `eval/final` (pending) |
 
 ---
 
-## File Changes Needed
+## File Changes Completed ✅
 
-1. **`prepare_data.py`** — add `latex-strip` subcommand, `retokenize` subcommand
-2. **`train.py`** — make `N_LAYER`, `N_HEAD`, `N_EMBD`, `BLOCK` configurable via CLI; add `--budget` for 2.5B
-3. **`train.py`** — add `--mode instruct` for instruction-tuning phase
-4. **`sample.py`** — support chat template, temperature sweep eval
-5. **New: `eval.py`** — automated evaluation script
+1. **`prepare_data.py`** — added `latex-strip` subcommand, `retokenize` subcommand
+2. **`train.py`** — model config (n_layer, n_head, n_embd, block) configurable via CLI; `--budget` for 2.5B
+3. **`train.py`** — `--resume` restores full state bit-exactly
+4. **`sample.py`** — works with checkpoints (needs chat template for instruct phase)
+5. **New: `benchmark_vram.py`** — VRAM benchmarking for config selection
 
 ---
 
 ## Execution Order
 
 1. ✅ Benchmark VRAM (done)
-2. Create plan file (this)
-3. Implement LaTeX stripper in `prepare_data.py`
-4. Run re-tokenization
-5. Update `train.py` for 124M/512 config
-6. Start pretrain (`./run_training.sh --budget 2500000000`)
-7. Monitor, pause/resume as needed
+2. ✅ Create plan file (this)
+3. ✅ Implement LaTeX stripper in `prepare_data.py`
+4. ✅ Run re-tokenization
+5. ✅ Update `train.py` for 124M/512 config
+6. ✅ Start pretrain (`./run_training.sh --budget 2500000000`)
+7. 🔄 Monitor, pause/resume as needed (currently at 207.5M tokens)
 8. At 2.5B: run instruction-tune
 9. Final evaluation
 10. Tag final checkpoints
@@ -131,17 +131,18 @@
 
 | Risk | Mitigation |
 |------|------------|
-| OOM at µ-batch 4 | Benchmark confirms 4.25 GB; fallback to µ-batch 2 (8.7k tok/s, 80h) |
-| LaTeX stripping breaks math | Test on samples first; keep raw LaTeX as fallback corpus |
-| Training instability | 0 AMP skips in pilot; GradScaler + clip handles it |
-| 2-week wall limit | Checkpoint every 25M tokens; can pause any time |
-| opencode restart | Git tags at each milestone; `train.py --resume` handles training resume |
+| OOM at µ-batch 4 | Benchmark confirmed 4.25 GB; measured 7.8 GB real (display overhead) |
+| Throughput degradation | Fresh process restart recovers (CUDA context fragmentation) |
+| LaTeX stripping breaks math | Tested on samples; raw LaTeX preserved in `corpus/clean/` |
+| Training instability | 0 AMP skips throughout; GradScaler + clip handles it |
+| 2-week wall limit | Checkpoint every ~65M tokens; can pause any time |
+| opencode restart | Git tags at milestones; `train.py --resume` handles training resume |
 
 ---
 
 ## Success Criteria
 
-- Pretrain val loss < 3.0 nats (aggregate)
+- Pretrain val loss < 3.0 nats (aggregate) — **currently 4.25 at 207M, on track**
 - Instruction-tuned model: coherent multi-sentence STEM responses
 - <10% repetition rate at temp 0.8
 - EOT token emitted naturally in >50% of completions
@@ -149,4 +150,4 @@
 
 ---
 
-*Plan created 2026-09-09. Execute phases sequentially.*
+*Plan created 2026-09-09. Updated 2026-09-09 (207.5M tokens, step 1583). Execute phases sequentially.*
