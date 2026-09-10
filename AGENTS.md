@@ -78,7 +78,9 @@ rules. Keep changes small.
   Throughput recovered to ~13.6k tok/s after fresh process restart (was 2–11k
   tok/s due to CUDA context fragmentation). **VRAM ~7.8 GB (measured peak, vs ~6.5 GB synthetic benchmark), near-zero headroom on 8 GB Max-Q; GPU temp 86°C sustained.**
   **Mitigation**: throughput degradation requires manual process restart; no automated watchdog implemented — manual monitoring recommended for multi-day run.
-  Target: 2.5B tokens (19.7 epochs). Next eval at 262M (step 2000), next checkpoint at 262M.
+  **Current (2026-09-10 11:47)**: 891M tokens (step 6800), loss ~2.9, best_val 2.91 at 852M (step 6500).
+  Throughput stable 11–14k tok/s. Next eval at 918M (step 7000), next checkpoint at 918M.
+  Target: 2.5B tokens (19.7 epochs).
 - `train.py` updated: model config (n_layer, n_head, n_embd, block) now
   configurable via CLI; `--resume` restores full state bit-exactly.
 - `prepare_data.py` updated: `latex-strip` and `retokenize` subcommands added.

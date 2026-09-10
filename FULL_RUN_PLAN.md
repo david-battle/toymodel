@@ -56,10 +56,10 @@
 - Mixture: arXiv 60% / SE 28% / Wikipedia 12%
 - Held-out: 0.5% per source (fixed split)
 - Resume from `ckpt/last.pt` on interrupt
-- **Current**: 207.5M tokens (8.3%), step 1583, loss 4.10, best_val 4.25
-- **Throughput**: recovered to 13.6k tok/s after fresh restart
-- **Next eval**: ~262M tokens (step 2000)
-- **Next checkpoint**: ~262M tokens (step 2000)
+- **Current (2026-09-10 11:47)**: 891M tokens (35.7%), step 6800, loss ~2.9, best_val 2.91 at 852M (step 6500)
+- **Throughput**: stable 11–14k tok/s
+- **Next eval**: 918M tokens (step 7000)
+- **Next checkpoint**: 918M tokens (step 7000)
 
 ### Phase 3: Instruction Tuning (planned)
 - Format SE Q&A as chat: `Q: <question>\nA: <accepted_answer><|endoftext|>`
