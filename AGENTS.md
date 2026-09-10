@@ -17,7 +17,7 @@ rules. Keep changes small.
   waiting on the child's inherited stdout and trips timeouts. The script uses
   `setsid` + a log redirect of ALL three fds (`>log 2>&1 </dev/null`), which
   detaches the run into its own session so it survives the shell that started
-  it. Launch with `./run_training.sh` (defaults are the ~30 min pilot) and add
+  it. Launch with `./run_training.sh` (defaults are the ~30 min pilot: `--eval-steps 75 --ckpt-steps 100`; train.py defaults are 200/500) and add
   extra `train.py` args to override. Pause with `kill -TERM $(cat
   logs/pilot.pid)` (checkpoint + exit); resume with `--resume ckpt/last.pt`.
 - Python is **3.14.4**; use the project venv at `.venv/`. **Verified toolchain**:
@@ -66,17 +66,19 @@ rules. Keep changes small.
   corpus/ keeps only clean + tokens; `audit` derives counts from corpus/tokens
   directly). Textbooks (OpenStax/Wikibooks) were **dropped** — not worth the
   engineering for the token gain; final **60/28/12 mix** (arXiv/SE/Wikipedia)
-  stays within every 5-pass cap for a 2.5 B-token budget (see plan §3).
+  exceeds 5-pass cap at 2.5B budget (arXiv ~28×, SE ~15×, Wiki ~12×); 1B budget respects caps.
   - LaTeX stripping (pylatexenc + custom heuristics): converts `$...$`,
     `$$...$$`, `\frac`, `\sqrt`, Greek letters, arrows, relations → Unicode.
     Strips `## Answer` markers from SE.
+  - **Audit note**: 285M→127M token drop from LaTeX stripping is plausible but doc-count diff vs pre-strip not yet verified; could include silently dropped documents.
 - **50M-token pilot complete** (50.1M tokens, best_val 5.68, loss 10.4→5.5,
   0 AMP skips, finished cleanly on `budget-exhausted`).
 - **124M full run IN PROGRESS**: 12 layers × 768 dim, context 512, ~124M params.
   Resumed at 207.5M tokens (step 1583), loss 4.10, best_val 4.25.
   Throughput recovered to ~13.6k tok/s after fresh process restart (was 2–11k
-  tok/s due to CUDA context fragmentation). VRAM ~7.8 GB, GPU temp 86°C.
-  Target: 2.5B tokens (19.7 epochs). Next eval at 262M, next checkpoint at 262M.
+  tok/s due to CUDA context fragmentation). **VRAM ~7.8 GB (measured peak, vs ~6.5 GB synthetic benchmark), near-zero headroom on 8 GB Max-Q; GPU temp 86°C sustained.**
+  **Mitigation**: throughput degradation requires manual process restart; no automated watchdog implemented — manual monitoring recommended for multi-day run.
+  Target: 2.5B tokens (19.7 epochs). Next eval at 262M (step 2000), next checkpoint at 262M.
 - `train.py` updated: model config (n_layer, n_head, n_embd, block) now
   configurable via CLI; `--resume` restores full state bit-exactly.
 - `prepare_data.py` updated: `latex-strip` and `retokenize` subcommands added.

@@ -2,7 +2,7 @@
 
 **Target**: 124M-param decoder-only GPT (L12 H12 D768), context 512, trained on 2.5B tokens of cleaned STEM corpus with instruction-tuning phase.
 
-**Hardware**: RTX 2080 Super Max-Q 8GB (≈6.5 GB usable after display)
+**Hardware**: RTX 2080 Super Max-Q 8GB (≈7 GB usable after display; measured peak 7.8 GB)
 
 ---
 
@@ -34,9 +34,9 @@
 | Eval interval | ~65M tokens (every 500 steps) |
 | Checkpoint interval | ~65M tokens (every 500 steps) + signals |
 
-**VRAM**: ~7.8 GB peak allocated (measured), safe with 1 GB display overhead.
+**VRAM**: ~7.8 GB peak allocated (measured), near-zero headroom on 8 GB Max-Q; GPU temp 86°C sustained.
 
-**Throughput**: ~11–13.6k tok/s sustained (measured, after fresh restart).
+**Throughput**: ~11–13.6k tok/s sustained (measured, after fresh restart). **Degradation to 2–11k tok/s observed due to CUDA context fragmentation; requires manual process restart to recover. No automated watchdog implemented.**
 
 **Time estimate**: 2.5B / 11k ≈ **63 hours (2.6 days)** pretrain + 4h instruct-tune = **~3 days GPU time**. 2-week wall budget allows for pauses, data prep, eval.
 
@@ -131,8 +131,8 @@
 
 | Risk | Mitigation |
 |------|------------|
-| OOM at µ-batch 4 | Benchmark confirmed 4.25 GB; measured 7.8 GB real (display overhead) |
-| Throughput degradation | Fresh process restart recovers (CUDA context fragmentation) |
+| OOM at µ-batch 4 | Benchmark confirmed 4.25 GB synthetic; measured 7.8 GB real (near-zero headroom) |
+| Throughput degradation | Fresh process restart recovers (CUDA context fragmentation). **Manual monitoring required** — no automated watchdog. |
 | LaTeX stripping breaks math | Tested on samples; raw LaTeX preserved in `corpus/clean/` |
 | Training instability | 0 AMP skips throughout; GradScaler + clip handles it |
 | 2-week wall limit | Checkpoint every ~65M tokens; can pause any time |

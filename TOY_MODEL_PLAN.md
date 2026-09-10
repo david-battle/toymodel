@@ -439,6 +439,7 @@ rotation matters even with 900 GB free.
    arXiv ranked-direct (~54M tokens, 5,015 papers), Wikipedia STEM-titled
    (~24.6M tokens, 19,596 articles). LaTeX-stripped total ≈ 127M tokens.
    Textbooks dropped; final 60/28/12 mix (see §3).
+   **Audit note**: 285M→127M token drop from LaTeX stripping is plausible but doc-count diff vs pre-strip not yet verified; could include silently dropped documents.
 4. `train.py` with checkpointing + suspend/resume. ✅ (smoke-verified: fresh
    run, resume, SIGTERM-pause → resume, `--no-accumulate`; model config
    now CLI-configurable)
