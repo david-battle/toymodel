@@ -288,12 +288,12 @@ def save_checkpoint(model, opt, scaler, sampler, step, tokens_seen, best_val,
     }
     last = CKPT_DIR / "last.pt"
     _atomic_save(state, last)
-    # rotate: keep a step-<N>.pt every 10k steps, only the most recent 3
-    if step % 10000 == 0:
+    # rotate: keep a step-<N>.pt every 5k steps, only the most recent 5
+    if step % 5000 == 0:
         snap = CKPT_DIR / f"step-{step}.pt"
         _atomic_save(state, snap)
         snaps = sorted(CKPT_DIR.glob("step-*.pt"))
-        for old in snaps[:-3]:
+        for old in snaps[:-5]:
             old.unlink(missing_ok=True)
     size = last.stat().st_size / 1e9
     print(f"[ckpt] saved last.pt ({size:.2f} GB) tokens={tokens_seen/1e6:.1f}M "

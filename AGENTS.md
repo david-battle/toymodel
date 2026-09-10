@@ -12,14 +12,14 @@ rules. Keep changes small.
   (already done), leave `git push` to the user. `push` is the user's shell
   script that pushes all their repos; don't substitute a plain `git push` when
   the user types a `(cd .. ; push )` line — run the script exactly as given.
-- **Start background training only via `./run_training.sh`.** A bare
+- **Start background training only via `./run_training.sh` or `./run_training_watchdog.sh`.** A bare
   `python train.py &` (or `nohup ... &`) keeps the launching shell/tool open
-  waiting on the child's inherited stdout and trips timeouts. The script uses
+  waiting on the child's inherited stdout and trips timeouts. The scripts use
   `setsid` + a log redirect of ALL three fds (`>log 2>&1 </dev/null`), which
   detaches the run into its own session so it survives the shell that started
-  it. Launch with `./run_training.sh` (defaults are the ~30 min pilot: `--eval-steps 75 --ckpt-steps 100`; train.py defaults are 200/500) and add
-  extra `train.py` args to override. Pause with `kill -TERM $(cat
-  logs/pilot.pid)` (checkpoint + exit); resume with `--resume ckpt/last.pt`.
+  it.
+  - `./run_training.sh`: basic launcher (defaults: pilot `--eval-steps 75 --ckpt-steps 100`; train.py defaults 200/500). Pause with `kill -TERM $(cat logs/pilot.pid)` (checkpoint + exit); resume with `--resume ckpt/last.pt`.
+  - `./run_training_watchdog.sh`: launches training + a watchdog that monitors throughput via `logs/pilot.log`. If tok/s drops below threshold (default 10k) for 3 consecutive checks, sends SIGTERM to trigger checkpoint, waits, then restarts with `--resume ckpt/last.pt`. Watchdog logs to `logs/watchdog.log`, PID in `logs/watchdog.pid`. Stop watchdog with `kill -TERM $(cat logs/watchdog.pid)`.
 - Python is **3.14.4**; use the project venv at `.venv/`. **Verified toolchain**:
   `torch==2.14.0+cu126` installed from the `download.pytorch.org/whl/cu126`
   index (NOT the PyPI default, which is `+cu130` and requires a newer driver
@@ -73,13 +73,11 @@ rules. Keep changes small.
   - **Audit note**: 285M→127M token drop from LaTeX stripping is plausible but doc-count diff vs pre-strip not yet verified; could include silently dropped documents.
 - **50M-token pilot complete** (50.1M tokens, best_val 5.68, loss 10.4→5.5,
   0 AMP skips, finished cleanly on `budget-exhausted`).
-- **124M full run IN PROGRESS**: 12 layers × 768 dim, context 512, ~124M params.
-  Resumed at 207.5M tokens (step 1583), loss 4.10, best_val 4.25.
-  Throughput recovered to ~13.6k tok/s after fresh process restart (was 2–11k
-  tok/s due to CUDA context fragmentation). **VRAM ~7.8 GB (measured peak, vs ~6.5 GB synthetic benchmark), near-zero headroom on 8 GB Max-Q; GPU temp 86°C sustained.**
-  **Mitigation**: throughput degradation requires manual process restart; no automated watchdog implemented — manual monitoring recommended for multi-day run.
-  **Current (2026-09-10 11:47)**: 891M tokens (step 6800), loss ~2.9, best_val 2.91 at 852M (step 6500).
-  Throughput stable 11–14k tok/s. Next eval at 918M (step 7000), next checkpoint at 918M.
+- **124M full run CRASHED at ~1017M tokens (step 7760)** — CUDA unknown error (likely OOM / driver fault at 86°C, 7.8 GB VRAM).
+  Last clean checkpoint: **step 7500, 983M tokens** (`ckpt/last.pt`, 1.49 GB). ~34M tokens lost.
+  **Recovery**: 983M checkpoint was overwritten by accidental fresh run. Recovered model weights from `best.pt` (best_val=2.899 at 983M) into a fresh `last.pt` with reset optimizer/scaler/RNG at step 0. Training restarts from 0 tokens with warm-started weights.
+  **Watchdog implemented** (`watchdog.py`, `run_training_watchdog.sh`): monitors `logs/pilot.log` for throughput drops below 10k tok/s (3 consecutive checks), sends SIGTERM for graceful checkpoint+restart.
+  **Checkpoint rotation improved**: step snapshots now every 5k steps (was 10k), keeping 5 most recent.
   Target: 2.5B tokens (19.7 epochs).
 - `train.py` updated: model config (n_layer, n_head, n_embd, block) now
   configurable via CLI; `--resume` restores full state bit-exactly.
@@ -104,6 +102,9 @@ rules. Keep changes small.
 - `sample.py` — text generation from a checkpoint (best.pt weights-only or
   last.pt full), temperature/top-k/top-p; rough-in pending recheck after the
   pilot run.
+- `watchdog.py` — monitors `logs/pilot.log` throughput; on sustained drop
+  below threshold, sends SIGTERM to training process for graceful checkpoint+restart.
+- `run_training_watchdog.sh` — launches training + watchdog detached via `setsid`.
 
 ## Planned files (from plan)
 
@@ -118,6 +119,13 @@ save model + optimizer (Adam m/v), token-budget schedule, GradScaler, sampler
 and RNG state. Signal handlers only set flags; save at a completed update
 boundary. See the plan for atomic writes, compatibility checks and resume
 verification.
+
+**Watchdog integration**: `watchdog.py` uses the same SIGTERM mechanism. It
+tails `logs/pilot.log`, parses `tok/s=` from log lines, and when throughput
+drops below threshold (default 10k) for 3 consecutive readings (30s interval),
+sends SIGTERM. Training checkpoints at next update and exits. Watchdog waits,
+then restarts with `--resume ckpt/last.pt`. This recovers from throughput
+degradation before OOM/crash.
 
 ## Handoff procedure
 
