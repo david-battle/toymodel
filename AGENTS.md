@@ -8,11 +8,8 @@ rules. Keep changes small.
 
 ## Conventions
 
-- **Status checks always show per-source eval breakdown + system health.** When the user asks for a status check, include: (1) the latest `[eval]` line from `logs/pilot.log` with losses broken out by source (arxiv, se-math, se-physics, se-cstheory, se-chemistry, se-stats, wikipedia) — **always the most recent eval regardless of any intervening restarts**; (2) watchdog process verified running (PID from `logs/watchdog.pid`); (3) training process PID (from `logs/pilot.pid`); (4) GPU memory used (via `nvidia-smi`); (5) current throughput (tok/s from latest log line); (6) GPU temperature (via `nvidia-smi`); (7) **estimated time until next eval** (based on current step, eval-steps interval, and tok/s); (8) **watchdog-triggered restarts since last manual restart** (from `logs/watchdog.log`).
-- **The assistant commits; the user pushes.** After the initial setup commit
-  (already done), leave `git push` to the user. `push` is the user's shell
-  script that pushes all their repos; don't substitute a plain `git push` when
-  the user types a `(cd .. ; push )` line — run the script exactly as given.
+- **NEVER `git push`.** The assistant commits; the user pushes. This is absolute — do not push unless explicitly asked. `push` is the user's shell script that pushes all their repos; when the user types `(cd .. ; push )`, run that exact script, don't substitute `git push`.
+- **The assistant commits; the user pushes.** After the initial setup commit (already done), leave `git push` to the user. `push` is the user's shell script that pushes all their repos; don't substitute a plain `git push` when the user types a `(cd .. ; push )` line — run the script exactly as given.
 - **Start background training only via `./run_training.sh` or `./run_training_watchdog.sh`.** A bare
   `python train.py &` (or `nohup ... &`) keeps the launching shell/tool open
   waiting on the child's inherited stdout and trips timeouts. The scripts use
