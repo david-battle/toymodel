@@ -8,6 +8,7 @@ rules. Keep changes small.
 
 ## Conventions
 
+- **Status checks always show per-source eval breakdown.** When the user asks for a status check, include the latest `[eval]` line from `logs/pilot.log` with losses broken out by source (arxiv, se-math, se-physics, se-cstheory, se-chemistry, se-stats, wikipedia).
 - **The assistant commits; the user pushes.** After the initial setup commit
   (already done), leave `git push` to the user. `push` is the user's shell
   script that pushes all their repos; don't substitute a plain `git push` when
