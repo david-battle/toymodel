@@ -25,9 +25,9 @@ TRAIN_ARGS=(
     --log-steps 20
 )
 
-# Allow override from command line
+# Allow override from command line: user args are appended so they override defaults
 if [ $# -gt 0 ]; then
-    TRAIN_ARGS=("$@")
+    TRAIN_ARGS+=("$@")
 fi
 
 # Check for existing training process

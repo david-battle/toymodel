@@ -153,9 +153,19 @@ def restart_training(resume_path: str, extra_args: list[str]) -> subprocess.Pope
 
 
 def parse_train_args() -> list[str]:
-    """Extract the training arguments from the current command line or ps."""
-    # We'll just pass through the original args from the crashed process
-    # For now, use the known full-run config
+    """Extract the training arguments from the training process cmdline."""
+    pid = get_training_pid()
+    if pid:
+        try:
+            with open(f"/proc/{pid}/cmdline", "r") as f:
+                cmdline = f.read().split("\x00")
+            # Find train.py and extract args after it
+            for i, part in enumerate(cmdline):
+                if "train.py" in part:
+                    return cmdline[i+1:]
+        except (OSError, IndexError):
+            pass
+    # Fallback: full-run config
     return [
         "--n-layer", "12",
         "--n-head", "12",
