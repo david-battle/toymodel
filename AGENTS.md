@@ -8,7 +8,7 @@ rules. Keep changes small.
 
 ## Conventions
 
-- **Status checks always show per-source eval breakdown + system health.** When the user asks for a status check, include: (1) the latest `[eval]` line from `logs/pilot.log` with losses broken out by source (arxiv, se-math, se-physics, se-cstheory, se-chemistry, se-stats, wikipedia); (2) watchdog process verified running (PID from `logs/watchdog.pid`); (3) GPU memory used (via `nvidia-smi`); (4) current throughput (tok/s from latest log line); (5) GPU temperature (via `nvidia-smi`).
+- **Status checks always show per-source eval breakdown + system health.** When the user asks for a status check, include: (1) the latest `[eval]` line from `logs/pilot.log` with losses broken out by source (arxiv, se-math, se-physics, se-cstheory, se-chemistry, se-stats, wikipedia); (2) watchdog process verified running (PID from `logs/watchdog.pid`); (3) GPU memory used (via `nvidia-smi`); (4) current throughput (tok/s from latest log line); (5) GPU temperature (via `nvidia-smi`); (6) **estimated time until next eval** (based on current step, eval-steps interval, and tok/s); (7) **watchdog-triggered restarts since last manual restart** (from `logs/watchdog.log`).
 - **The assistant commits; the user pushes.** After the initial setup commit
   (already done), leave `git push` to the user. `push` is the user's shell
   script that pushes all their repos; don't substitute a plain `git push` when
