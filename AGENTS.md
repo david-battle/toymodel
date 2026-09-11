@@ -21,6 +21,7 @@ rules. Keep changes small.
   it.
   - `./run_training.sh`: basic launcher (defaults: pilot `--eval-steps 75 --ckpt-steps 100`; train.py defaults 200/500). Pause with `kill -TERM $(cat logs/pilot.pid)` (checkpoint + exit); resume with `--resume ckpt/last.pt`.
   - `./run_training_watchdog.sh`: launches training + a watchdog that monitors throughput via `logs/pilot.log`. If tok/s drops below threshold (default 10k) for 3 consecutive checks, sends SIGTERM to trigger checkpoint, waits, then restarts with `--resume ckpt/last.pt`. Watchdog logs to `logs/watchdog.log`, PID in `logs/watchdog.pid`. Stop watchdog with `kill -TERM $(cat logs/watchdog.pid)`.
+- **Stop watchdog BEFORE stopping training when using `run_training_watchdog.sh`.** The watchdog monitors `logs/pilot.log` and restarts training if it detects the process died or throughput drops. If you stop training first, the watchdog will see the process gone and restart it on the next log line (or immediately if it polls). Always: `kill -TERM $(cat logs/watchdog.pid)` then `kill -TERM $(cat logs/pilot.pid)`.
 - Python is **3.14.4**; use the project venv at `.venv/`. **Verified toolchain**:
   `torch==2.14.0+cu126` installed from the `download.pytorch.org/whl/cu126`
   index (NOT the PyPI default, which is `+cu130` and requires a newer driver
@@ -80,7 +81,7 @@ rules. Keep changes small.
   **Watchdog implemented** (`watchdog.py`, `run_training_watchdog.sh`): monitors `logs/pilot.log` for throughput drops below 10k tok/s (3 consecutive checks), sends SIGTERM for graceful checkpoint+restart.
   **Checkpoint rotation improved**: step snapshots now every 5k steps (was 10k), keeping 5 most recent.
   Target: 2.5B tokens (19.7 epochs).
-- **Run paused at step 4621 (605.7M tokens, 24.2%)** — graceful SIGTERM checkpoint saved to `ckpt/last.pt` (1.49 GB). Latest eval (step 4500, 589.8M): agg 2.564 (arxiv 2.251, se-math 2.331, wiki 3.255). Watchdog still running (PID 45920). Resume with `--resume ckpt/last.pt`.
+- **Run paused at step 4621 (605.7M tokens, 24.2%)** — graceful SIGTERM checkpoint saved to `ckpt/last.pt` (1.49 GB). Latest eval (step 4500, 589.8M): agg 2.564 (arxiv 2.251, se-math 2.331, wiki 3.255). Watchdog stopped. Resume with `--resume ckpt/last.pt`.
 - `train.py` updated: model config (n_layer, n_head, n_embd, block) now
   configurable via CLI; `--resume` restores full state bit-exactly.
 - `prepare_data.py` updated: `latex-strip` and `retokenize` subcommands added.
