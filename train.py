@@ -48,7 +48,7 @@ BLOCK = 256
 
 # Final recorded mixture (see plan 3): arXiv 60% / SE 28% / Wikipedia 12%.
 # The SE share is subdivided among its sub-sources proportional to tokens.
-MIX = {"arxiv": 0.60, "wikipedia": 0.12, "SE": 0.28}
+MIX = {"arxiv": 0.60, "wikipedia": 0.12, "SE": 0.28, "instruct": 1.0}
 SE_SOURCES = ["se-math", "se-physics", "se-stats", "se-chemistry", "se-cstheory"]
 
 PEAK_LR = 6e-4
@@ -161,7 +161,7 @@ class LossFn(nn.Module):
 # The sampler picks sources at the recorded mix, then a random document and a
 # random window within it, filling BLOCK tokens (cyclic within the doc).
 
-def load_sources():
+def load_sources(target_source=None):
     sources = []
     se_tokens = {}
     for tok_file in sorted(TOKENS.glob("*.bin")):
@@ -179,6 +179,12 @@ def load_sources():
         for s in sources:
             if s["name"] in SE_SOURCES:
                 s["weight"] = MIX["SE"] * se_tokens[s["name"]] / se_total
+    if target_source:
+        sources = [s for s in sources if s["name"] == target_source]
+        if not sources:
+            sys.exit(f"Source '{target_source}' not found in tokenized corpus")
+        # set weight to 1.0 for single source
+        sources[0]["weight"] = 1.0
     return [s for s in sources if s["weight"] > 0]
 
 
@@ -240,7 +246,13 @@ class Sampler:
 # LR schedule in tokens
 # ---------------------------------------------------------------------------
 
+PEAK_LR = 6e-4
+MIN_LR = 6e-5
+LR_MODE = "cosine"
+
 def lr_at(tokens, budget):
+    if LR_MODE == "constant":
+        return PEAK_LR
     warm = int(0.02 * budget)
     if tokens <= warm:
         return PEAK_LR
@@ -316,6 +328,20 @@ def load_checkpoint(path, model, opt, scaler, sampler, config):
     sampler.gen.set_state(state["rng"])
     torch.set_rng_state(state["torch_rng"])
     torch.cuda.set_rng_state(state["cuda_rng"], torch.device(DEV))
+    return state
+
+
+def load_weights_only(path, model, config):
+    """Load only model weights from checkpoint (for fine-tuning / instruction tuning)."""
+    state = torch.load(path, map_location="cpu", weights_only=True)
+    if state["fmt"] != config["fmt"]:
+        sys.exit(f"[weights] checkpoint format {state['fmt']} != {config['fmt']}")
+    for k in ("n_layer", "n_head", "n_embd", "block_size"):
+        if state["config"].get(k) != config.get(k):
+            sys.exit(f"[weights] model config mismatch: {k}={state['config'].get(k)} != {config.get(k)}")
+    model.load_state_dict(state["model"])
+    model = model.to(DEV)
+    print(f"[weights] loaded model weights from {path} (step {state.get('step', '?')}, tokens {state.get('tokens_seen', 0)/1e6:.1f}M)", flush=True)
     return state
 
 
@@ -411,7 +437,9 @@ def main():
     ap.add_argument("--accum", type=int, default=None,
                     help="gradient accumulation count (default = eff/micro)")
     ap.add_argument("--resume", type=str, default=None,
-                    help="checkpoint to resume from")
+                    help="checkpoint to resume from (full state)")
+    ap.add_argument("--resume-weights-only", type=str, default=None,
+                    help="checkpoint to load model weights from (fresh optimizer/schedule)")
     ap.add_argument("--ckpt-steps", type=int, default=500,
                     help="auto-checkpoint every N updates")
     ap.add_argument("--eval-steps", type=int, default=200,
@@ -424,6 +452,13 @@ def main():
     ap.add_argument("--n-head", type=int, default=N_HEAD)
     ap.add_argument("--n-embd", type=int, default=N_EMBD)
     ap.add_argument("--block", type=int, default=BLOCK)
+    # LR schedule options
+    ap.add_argument("--lr-mode", type=str, default="cosine", choices=["cosine", "constant"],
+                    help="LR schedule: cosine (default) or constant")
+    ap.add_argument("--lr", type=float, default=6e-4, help="peak learning rate")
+    ap.add_argument("--min-lr", type=float, default=6e-5, help="min LR for cosine")
+    ap.add_argument("--source", type=str, default=None,
+                    help="train only on this source (e.g. 'instruct')")
     args = ap.parse_args()
 
     # Apply model config
@@ -432,6 +467,12 @@ def main():
     CFG_N_EMBD = args.n_embd
     CFG_BLOCK = args.block
 
+    # Apply LR config
+    global PEAK_LR, MIN_LR, LR_MODE
+    PEAK_LR = args.lr
+    MIN_LR = args.min_lr
+    LR_MODE = args.lr_mode
+
     user_budget = args.budget
     if args.budget is None:
         args.budget = 20_000_000
@@ -439,7 +480,7 @@ def main():
     install_signals()
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
-    sources = load_sources()
+    sources = load_sources(args.source)
     for s in sources:
         print(f"  source {s['name']:<14} weight={s.get('weight', MIX.get(s['name'],0)):.3f} "
               f"docs={len(s['offsets'])-1} tokens={int(s['offsets'][-1])/1e6:.1f}M", flush=True)
@@ -483,6 +524,8 @@ def main():
     }
 
     if args.resume:
+        if args.resume_weights_only:
+            sys.exit("Cannot use both --resume and --resume-weights-only")
         if args.no_accumulate:
             sys.exit("--resume with --no-accumulate is not supported")
         st = load_checkpoint(args.resume, model, opt, scaler, sampler, config)
@@ -498,6 +541,13 @@ def main():
                   flush=True)
         print(f"[resume] step={step} tokens_seen={tokens_seen/1e6:.1f}M "
               f"best_val={best_val:.4f} budget={args.budget/1e6:.0f}M", flush=True)
+    elif args.resume_weights_only:
+        st = load_weights_only(args.resume_weights_only, model, config)
+        step = 0
+        tokens_seen = 0
+        best_val = float("inf")
+        torch.manual_seed(args.seed)
+        print(f"[weights-only] starting fresh optimizer/schedule from pretrained weights", flush=True)
     else:
         torch.manual_seed(args.seed)
     config["budget"] = args.budget
