@@ -80,6 +80,7 @@ rules. Keep changes small.
   **Watchdog implemented** (`watchdog.py`, `run_training_watchdog.sh`): monitors `logs/pilot.log` for throughput drops below 10k tok/s (3 consecutive checks), sends SIGTERM for graceful checkpoint+restart.
   **Checkpoint rotation improved**: step snapshots now every 5k steps (was 10k), keeping 5 most recent.
   Target: 2.5B tokens (19.7 epochs).
+- **Run paused at step 4621 (605.7M tokens, 24.2%)** — graceful SIGTERM checkpoint saved to `ckpt/last.pt` (1.49 GB). Latest eval (step 4500, 589.8M): agg 2.564 (arxiv 2.251, se-math 2.331, wiki 3.255). Watchdog still running (PID 45920). Resume with `--resume ckpt/last.pt`.
 - `train.py` updated: model config (n_layer, n_head, n_embd, block) now
   configurable via CLI; `--resume` restores full state bit-exactly.
 - `prepare_data.py` updated: `latex-strip` and `retokenize` subcommands added.
