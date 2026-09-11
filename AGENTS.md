@@ -97,6 +97,7 @@ rules. Keep changes small.
   batch: ~31k tok/s, 2.5 GB (b8) / 4.1 GB (b16) peak alloc, ~74-77 W.
 - `prepare_data.py` — download/extract/clean/tokenize/audit CLI. `se` and
   `arxiv-rank`/`arxiv-fetch` and `wiki-fetch` sources implemented end-to-end.
+  **`instruct-prepare` added: formats SE Q&A as chat (`Q: ...\n\nA: ...`) for instruction tuning — 100k examples, 78M tokens.**
 - `train.py` — nanoGPT-style training loop, fp16 AMP, periodic checkpointing,
   signal-handler suspend/resume (`Ctrl-C` = checkpoint + exit; `--resume` =
   continue).

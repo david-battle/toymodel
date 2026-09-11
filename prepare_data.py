@@ -16,6 +16,7 @@ Subcommands:
   latex-strip <source>   convert LaTeX math to Unicode/plain text in clean/
   tokenize --source NAME --clean corpus/clean/NAME.jsonl
   retokenize <source>    tokenize stripped version from clean_stripped/
+  instruct-prepare       format SE Q&A as chat for instruction tuning
   audit                  report measured token supply per source
 
 Sources:
@@ -490,6 +491,63 @@ def arxiv_rank(top, mailto):
     log(f"[arxiv] ranked {len(ranked)} papers (dropped {dropped} off-category)"
         f" -> {out}")
 
+def instruct_prepare(min_score=5, require_accepted=True, output="instruct.jsonl", tokenize_output=False, source_name="instruct"):
+    """Format SE Q&A as chat: Q: <question>\nA: <answer><|endoftext|>"""
+    se_sources = ["se-math", "se-physics", "se-chemistry", "se-stats", "se-cstheory"]
+    out_file = CLEAN / output
+    if out_file.exists():
+        log(f"[instruct] {output}: already exists")
+        return
+
+    total_kept = 0
+    with out_file.open("w", encoding="utf-8") as fout:
+        for src in se_sources:
+            in_file = CLEAN / f"{src}.jsonl"
+            if not in_file.exists():
+                log(f"[instruct] {src}: not found, skipping")
+                continue
+            kept = 0
+            skipped = 0
+            with in_file.open(encoding="utf-8") as fin:
+                for line in fin:
+                    rec = json.loads(line)
+                    if float(rec.get("score", 0)) < min_score:
+                        skipped += 1
+                        continue
+                    if require_accepted and not rec.get("accepted", False):
+                        skipped += 1
+                        continue
+                    # Split on "## Answer" marker
+                    text = rec["text"]
+                    parts = text.split("## Answer\n\n", 1)
+                    if len(parts) != 2:
+                        skipped += 1
+                        continue
+                    question = parts[0].strip()
+                    answer = parts[1].strip()
+                    if not question or not answer:
+                        skipped += 1
+                        continue
+                    # Format as chat
+                    chat_text = f"Q: {question}\n\nA: {answer}"
+                    new_rec = {
+                        "source": source_name,
+                        "id": f"{src}-{rec['id']}",
+                        "url": rec.get("url", ""),
+                        "date": rec.get("date", ""),
+                        "score": rec.get("score", 0),
+                        "text": chat_text,
+                    }
+                    fout.write(json.dumps(new_rec, ensure_ascii=False) + "\n")
+                    kept += 1
+            log(f"[instruct] {src}: kept {kept}, skipped {skipped}")
+            total_kept += kept
+    log(f"[instruct] total kept: {total_kept} -> {out_file}")
+
+    if tokenize_output:
+        tokenize(source_name, out_file)
+
+
 END_MARKERS = ("\nreferences\n", "\nbibliography\n", "\nacknowledgments\n",
                "\nacknowledgements\n", "\nappendix\n")
 
@@ -723,6 +781,13 @@ def main():
 
     sub.add_parser("audit", help="show token supply per source")
 
+    p = sub.add_parser("instruct-prepare", help="format SE Q&A as chat for instruction tuning")
+    p.add_argument("--min-score", type=int, default=5, help="minimum question score")
+    p.add_argument("--require-accepted", action="store_true", default=True, help="require accepted answer")
+    p.add_argument("--output", default="instruct.jsonl", help="output filename in clean/")
+    p.add_argument("--tokenize", action="store_true", help="also tokenize the output")
+    p.add_argument("--source-name", default="instruct", help="source name for tokenization")
+
     args = ap.parse_args()
     if args.cmd == "download":
         for _ in args.source:
@@ -752,6 +817,14 @@ def main():
         wiki_fetch(args.max_tokens, args.shards)
     elif args.cmd == "audit":
         audit()
+    elif args.cmd == "instruct-prepare":
+        instruct_prepare(
+            min_score=args.min_score,
+            require_accepted=args.require_accepted,
+            output=args.output,
+            tokenize_output=args.tokenize,
+            source_name=args.source_name,
+        )
 
 
 if __name__ == "__main__":
